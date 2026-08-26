@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View, Pressable, AppState, AppStateStatus, Platform, TouchableOpacity, Text } from 'react-native';
-import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import GameRenderer from './GameRenderer';
 import {
@@ -85,7 +84,7 @@ export default function GameShell({ onUnlock, isUnlocked }: Props) {
   const triggerUnlock = useCallback(() => {
     if (Platform.OS !== 'web') {
       try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
       } catch (_) {}
     }
     onUnlock();
@@ -103,7 +102,6 @@ export default function GameShell({ onUnlock, isUnlocked }: Props) {
         stateRef.current = makeInitialState();
         setScore(0);
       } else if (e.code === 'KeyU') {
-        // Quick dev shortcut for testing on laptop
         triggerUnlock();
       }
     };
@@ -112,47 +110,34 @@ export default function GameShell({ onUnlock, isUnlocked }: Props) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleTap, triggerUnlock]);
 
-  // ─── Mobile Gesture Tap ───────────────────────────────────────────────────
-  const tapGesture = Gesture.Tap().onEnd(() => {
-    handleTap();
-  });
-
   return (
     <View style={styles.outerContainer}>
       <View style={styles.phoneFrame}>
-        <GestureDetector gesture={tapGesture}>
-          <Pressable style={styles.container} onPress={handleTap}>
-            {/* Game Canvas */}
-            <GameRenderer
-              state={stateRef.current}
-              cloudOffsets={cloudXsRef.current}
-            />
+        <Pressable style={styles.container} onPress={handleTap}>
+          {/* Game Canvas */}
+          <GameRenderer
+            state={stateRef.current}
+            cloudOffsets={cloudXsRef.current}
+          />
 
-            {/* Hidden Unlock Button 1: Secret top-right corner button */}
-            <TouchableOpacity
-              style={styles.hiddenUnlockCorner}
-              onPress={(e) => {
-                e.stopPropagation?.();
-                triggerUnlock();
-              }}
-              activeOpacity={0.6}
-              accessibilityLabel="Secret unlock"
-            >
-              {/* Invisible touch target — subtle tiny dot in dev mode */}
-              <View style={styles.secretDot} />
-            </TouchableOpacity>
+          {/* Hidden Unlock Button 1: Secret top-right corner button */}
+          <TouchableOpacity
+            style={styles.hiddenUnlockCorner}
+            onPress={triggerUnlock}
+            activeOpacity={0.6}
+            accessibilityLabel="Secret unlock"
+          >
+            {/* Invisible touch target — subtle tiny dot in dev mode */}
+            <View style={styles.secretDot} />
+          </TouchableOpacity>
 
-            {/* Hidden Unlock Button 2: Secret tap on the score area */}
-            <TouchableOpacity
-              style={styles.hiddenScoreButton}
-              onPress={(e) => {
-                e.stopPropagation?.();
-                triggerUnlock();
-              }}
-              activeOpacity={1}
-            />
-          </Pressable>
-        </GestureDetector>
+          {/* Hidden Unlock Button 2: Secret tap on the score area */}
+          <TouchableOpacity
+            style={styles.hiddenScoreButton}
+            onPress={triggerUnlock}
+            activeOpacity={1}
+          />
+        </Pressable>
       </View>
     </View>
   );
@@ -202,7 +187,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)', // nearly invisible subtle dot in the sky
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
   },
   // Secret touch zone right on the score number
   hiddenScoreButton: {

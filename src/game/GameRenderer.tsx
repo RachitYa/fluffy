@@ -1,18 +1,15 @@
 import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import {
   Canvas,
   Rect,
   RoundedRect,
   Circle,
   Path,
-  Skia,
   LinearGradient,
   vec,
   Group,
   Shadow,
-  Text as SkiaText,
-  useFont,
-  matchFont,
 } from '@shopify/react-native-skia';
 import { GameState, BIRD_X, BIRD_RADIUS, PIPE_WIDTH, PIPE_GAP, GROUND_Y, SCREEN_WIDTH, SCREEN_HEIGHT } from './useGameLoop';
 
@@ -31,7 +28,7 @@ const BIRD_EYE   = '#333333';
 
 interface Props {
   state: GameState;
-  cloudOffsets: number[]; // pre-computed x positions for 4 clouds, updated outside
+  cloudOffsets: number[];
 }
 
 // ─── Static cloud shapes ──────────────────────────────────────────────────────
@@ -71,10 +68,8 @@ function PipePair({ x, topHeight }: { x: number; topHeight: number }) {
 
 // ─── Bird ─────────────────────────────────────────────────────────────────────
 function Bird({ y, vy }: { y: number; vy: number }) {
-  // Tilt: clamp velocity to [-12, 10], map to [-30°, 60°] rotation
   const angle = Math.min(60, Math.max(-30, vy * 4));
   const rad = (angle * Math.PI) / 180;
-  // Wing flap: bob based on absolute frame time using Date — just use vy sign
   const wingDrop = vy > 0 ? 5 : -5;
 
   return (
@@ -108,101 +103,127 @@ function Bird({ y, vy }: { y: number; vy: number }) {
 export default function GameRenderer({ state, cloudOffsets }: Props) {
   const { birdY, birdVY, pipes, score, phase } = state;
 
-  const fontStyle = { fontFamily: 'System', fontSize: 42, fontWeight: '700' as const };
-  const font = matchFont(fontStyle);
-  const smallFontStyle = { fontFamily: 'System', fontSize: 18, fontWeight: '400' as const };
-  const smallFont = matchFont(smallFontStyle);
-
   return (
-    <Canvas style={{ flex: 1 }}>
-      {/* Sky gradient */}
-      <Rect x={0} y={0} width={SCREEN_WIDTH} height={SCREEN_HEIGHT}>
-        <LinearGradient
-          start={vec(0, 0)}
-          end={vec(0, SCREEN_HEIGHT)}
-          colors={[SKY_TOP, SKY_BOT]}
-        />
-      </Rect>
-
-      {/* Clouds (parallax layer — slower than pipes) */}
-      {cloudOffsets.map((cx, i) => (
-        <Cloud key={i} x={cx} y={[120, 180, 90, 200][i % 4]} scale={[1, 0.7, 1.2, 0.85][i % 4]} />
-      ))}
-
-      {/* Distant hills */}
-      <Path
-        path={`M 0 ${GROUND_Y - 60} Q 100 ${GROUND_Y - 130} 200 ${GROUND_Y - 60} Q 300 ${GROUND_Y - 100} 390 ${GROUND_Y - 60} L 390 ${SCREEN_HEIGHT} L 0 ${SCREEN_HEIGHT} Z`}
-        color={HILL_CLR}
-        opacity={0.6}
-      />
-
-      {/* Pipes */}
-      {pipes.map((p) => (
-        <PipePair key={p.id} x={p.x} topHeight={p.topHeight} />
-      ))}
-
-      {/* Ground */}
-      <Rect x={0} y={GROUND_Y} width={SCREEN_WIDTH} height={SCREEN_HEIGHT - GROUND_Y} color={GROUND_CLR} />
-      <Rect x={0} y={GROUND_Y} width={SCREEN_WIDTH} height={6} color={GROUND_STR} />
-
-      {/* Bird */}
-      <Bird y={birdY} vy={birdVY} />
-
-      {/* Score — centered top */}
-      {phase !== 'idle' && font && (
-        <Group>
-          <SkiaText
-            x={SCREEN_WIDTH / 2 - (score.toString().length * 13)}
-            y={90}
-            text={score.toString()}
-            font={font}
-            color="rgba(255,255,255,0.25)"
+    <View style={styles.container}>
+      <Canvas style={{ flex: 1 }}>
+        {/* Sky gradient */}
+        <Rect x={0} y={0} width={SCREEN_WIDTH} height={SCREEN_HEIGHT}>
+          <LinearGradient
+            start={vec(0, 0)}
+            end={vec(0, SCREEN_HEIGHT)}
+            colors={[SKY_TOP, SKY_BOT]}
           />
-          <SkiaText
-            x={SCREEN_WIDTH / 2 - (score.toString().length * 13) - 1}
-            y={89}
-            text={score.toString()}
-            font={font}
-            color="#FFFFFF"
-          />
-        </Group>
-      )}
+        </Rect>
 
-      {/* Idle hint */}
-      {phase === 'idle' && smallFont && (
-        <SkiaText
-          x={SCREEN_WIDTH / 2 - 52}
-          y={SCREEN_HEIGHT / 2 + 70}
-          text="Tap to start"
-          font={smallFont}
-          color="rgba(80,80,120,0.7)"
+        {/* Clouds parallax layer */}
+        {cloudOffsets.map((cx, i) => (
+          <Cloud key={i} x={cx} y={[120, 180, 90, 200][i % 4]} scale={[1, 0.7, 1.2, 0.85][i % 4]} />
+        ))}
+
+        {/* Distant hills */}
+        <Path
+          path={`M 0 ${GROUND_Y - 60} Q 100 ${GROUND_Y - 130} 200 ${GROUND_Y - 60} Q 300 ${GROUND_Y - 100} 390 ${GROUND_Y - 60} L 390 ${SCREEN_HEIGHT} L 0 ${SCREEN_HEIGHT} Z`}
+          color={HILL_CLR}
+          opacity={0.6}
         />
-      )}
 
-      {/* Dead overlay */}
-      {phase === 'dead' && (
-        <>
-          <Rect x={0} y={0} width={SCREEN_WIDTH} height={SCREEN_HEIGHT} color="rgba(0,0,0,0.3)" />
-          {smallFont && (
-            <>
-              <SkiaText
-                x={SCREEN_WIDTH / 2 - 48}
-                y={SCREEN_HEIGHT / 2 - 10}
-                text="Game Over"
-                font={smallFont}
-                color="#fff"
-              />
-              <SkiaText
-                x={SCREEN_WIDTH / 2 - 52}
-                y={SCREEN_HEIGHT / 2 + 28}
-                text="Tap to try again"
-                font={smallFont}
-                color="rgba(255,255,255,0.7)"
-              />
-            </>
-          )}
-        </>
-      )}
-    </Canvas>
+        {/* Pipes */}
+        {pipes.map((p) => (
+          <PipePair key={p.id} x={p.x} topHeight={p.topHeight} />
+        ))}
+
+        {/* Ground */}
+        <Rect x={0} y={GROUND_Y} width={SCREEN_WIDTH} height={SCREEN_HEIGHT - GROUND_Y} color={GROUND_CLR} />
+        <Rect x={0} y={GROUND_Y} width={SCREEN_WIDTH} height={6} color={GROUND_STR} />
+
+        {/* Bird */}
+        <Bird y={birdY} vy={birdVY} />
+      </Canvas>
+
+      {/* ── Native Safe Text Overlay (Crash-proof on Android & iOS) ─────────── */}
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        {/* Score */}
+        {phase !== 'idle' && (
+          <View style={styles.scoreContainer}>
+            <Text style={styles.scoreShadowText}>{score}</Text>
+            <Text style={styles.scoreMainText}>{score}</Text>
+          </View>
+        )}
+
+        {/* Idle hint */}
+        {phase === 'idle' && (
+          <View style={styles.idleHintContainer}>
+            <Text style={styles.idleHintText}>Tap to start</Text>
+          </View>
+        )}
+
+        {/* Game Over overlay */}
+        {phase === 'dead' && (
+          <View style={styles.gameOverOverlay}>
+            <Text style={styles.gameOverTitle}>Game Over</Text>
+            <Text style={styles.gameOverSubtitle}>Tap to try again</Text>
+          </View>
+        )}
+      </View>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    position: 'relative',
+  },
+  scoreContainer: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  scoreShadowText: {
+    position: 'absolute',
+    top: 2,
+    fontSize: 48,
+    fontWeight: '900',
+    color: 'rgba(0, 0, 0, 0.15)',
+  },
+  scoreMainText: {
+    fontSize: 48,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  idleHintContainer: {
+    position: 'absolute',
+    top: '55%',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  idleHintText: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: 'rgba(60, 80, 110, 0.75)',
+  },
+  gameOverOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  gameOverTitle: {
+    fontSize: 32,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    marginBottom: 8,
+  },
+  gameOverSubtitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.85)',
+  },
+});
