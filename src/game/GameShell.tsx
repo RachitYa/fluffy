@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, Pressable, AppState, AppStateStatus } from 'react-native';
+import { StyleSheet, View, Pressable, AppState, AppStateStatus, Platform, TouchableOpacity, Text } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import GameRenderer from './GameRenderer';
@@ -9,48 +9,43 @@ import {
   tickGame,
   SCREEN_WIDTH,
   SCREEN_HEIGHT,
+  FLAP_IMPULSE,
 } from './useGameLoop';
 
 const CLOUD_COUNT = 5;
-const CLOUD_SPEED = 0.4; // px/frame, slower than pipes for parallax effect
+const CLOUD_SPEED = 0.35; // smooth parallax
 const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes backgrounded → re-lock
 
-// ─── Pre-computed initial cloud positions ────────────────────────────────────
 function makeCloudXs(): number[] {
   return Array.from({ length: CLOUD_COUNT }, (_, i) => (SCREEN_WIDTH / CLOUD_COUNT) * i + 30);
 }
 
 interface Props {
   onUnlock: () => void;
-  isUnlocked: boolean; // if true, skip re-lock on next foreground
+  isUnlocked: boolean;
 }
 
 export default function GameShell({ onUnlock, isUnlocked }: Props) {
   const stateRef = useRef<GameState>(makeInitialState());
   const cloudXsRef = useRef<number[]>(makeCloudXs());
-  const [renderTick, setRenderTick] = useState(0); // forces re-render each frame
+  const [renderTick, setRenderTick] = useState(0);
   const [score, setScore] = useState(0);
   const rafRef = useRef<number | null>(null);
   const backgroundedAtRef = useRef<number | null>(null);
 
-  // ─── Game loop via requestAnimationFrame ──────────────────────────────────
+  // ─── Main Game Loop (RAF) ──────────────────────────────────────────────────
   const loop = useCallback(() => {
-    // Tick physics
     stateRef.current = tickGame(stateRef.current);
 
-    // Update score state only on change (avoids re-render flood)
     const newScore = stateRef.current.score;
     setScore((prev) => (prev !== newScore ? newScore : prev));
 
-    // Scroll clouds
     cloudXsRef.current = cloudXsRef.current.map((x) => {
       const nx = x - CLOUD_SPEED;
       return nx + 80 < 0 ? SCREEN_WIDTH + 60 : nx;
     });
 
-    // Trigger re-render (Skia Canvas reads refs synchronously on draw)
     setRenderTick((t) => t + 1);
-
     rafRef.current = requestAnimationFrame(loop);
   }, []);
 
@@ -61,84 +56,162 @@ export default function GameShell({ onUnlock, isUnlocked }: Props) {
     };
   }, [loop]);
 
-  // ─── App background / foreground → auto-lock ─────────────────────────────
+  // ─── Auto-lock on app background ──────────────────────────────────────────
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
       if (next === 'background' || next === 'inactive') {
         backgroundedAtRef.current = Date.now();
       } else if (next === 'active') {
-        const bg = backgroundedAtRef.current;
-        if (bg !== null && Date.now() - bg > LOCK_TIMEOUT_MS && isUnlocked) {
-          // Parent handles re-locking via the isUnlocked prop change —
-          // we notify it by calling onUnlock with a special signal.
-          // For simplicity in Phase 1 the parent tracks its own timer.
-        }
         backgroundedAtRef.current = null;
       }
     });
     return () => sub.remove();
   }, [isUnlocked]);
 
-  // ─── Tap → flap / restart ─────────────────────────────────────────────────
+  // ─── Tap / Flap / Restart (Gentle Float) ──────────────────────────────────
   const handleTap = useCallback(() => {
     const s = stateRef.current;
     if (s.phase === 'idle') {
-      stateRef.current = { ...s, phase: 'playing', birdVY: -10.5 };
+      stateRef.current = { ...s, phase: 'playing', birdVY: FLAP_IMPULSE };
     } else if (s.phase === 'playing') {
-      stateRef.current = { ...s, birdVY: -10.5 };
+      stateRef.current = { ...s, birdVY: FLAP_IMPULSE };
     } else if (s.phase === 'dead') {
       stateRef.current = makeInitialState();
       setScore(0);
     }
   }, []);
 
-  // ─── Hidden unlock: long-press on score counter region ───────────────────
-  // The score counter sits roughly at top-center. We overlay an invisible
-  // pressable over that region only. No visual feedback whatsoever.
-  const longPressGesture = Gesture.LongPress()
-    .minDuration(2000)
-    .onEnd((_, success) => {
-      if (success) {
+  // ─── Trigger Unlock ───────────────────────────────────────────────────────
+  const triggerUnlock = useCallback(() => {
+    if (Platform.OS !== 'web') {
+      try {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        onUnlock();
-      }
-    });
+      } catch (_) {}
+    }
+    onUnlock();
+  }, [onUnlock]);
 
+  // ─── Keyboard Controls (Space to jump, U to unlock) ──────────────────────
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' || e.code === 'ArrowUp') {
+        e.preventDefault();
+        handleTap();
+      } else if (e.code === 'KeyR' && stateRef.current.phase === 'dead') {
+        stateRef.current = makeInitialState();
+        setScore(0);
+      } else if (e.code === 'KeyU') {
+        // Quick dev shortcut for testing on laptop
+        triggerUnlock();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleTap, triggerUnlock]);
+
+  // ─── Mobile Gesture Tap ───────────────────────────────────────────────────
   const tapGesture = Gesture.Tap().onEnd(() => {
     handleTap();
   });
 
-  const combinedGesture = Gesture.Exclusive(longPressGesture, tapGesture);
-
   return (
-    <GestureDetector gesture={combinedGesture}>
-      <View style={styles.container}>
-        {/* Game canvas */}
-        <GameRenderer
-          state={stateRef.current}
-          cloudOffsets={cloudXsRef.current}
-        />
+    <View style={styles.outerContainer}>
+      <View style={styles.phoneFrame}>
+        <GestureDetector gesture={tapGesture}>
+          <Pressable style={styles.container} onPress={handleTap}>
+            {/* Game Canvas */}
+            <GameRenderer
+              state={stateRef.current}
+              cloudOffsets={cloudXsRef.current}
+            />
 
-        {/* Invisible unlock zone — overlaid on score counter position (top-center) */}
-        {/* This pressable is 120×70 px centred at top of screen */}
-        {/* It is truly invisible: no backgroundColor, no opacity hint */}
-        <View style={styles.unlockZone} pointerEvents="none" />
+            {/* Hidden Unlock Button 1: Secret top-right corner button */}
+            <TouchableOpacity
+              style={styles.hiddenUnlockCorner}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                triggerUnlock();
+              }}
+              activeOpacity={0.6}
+              accessibilityLabel="Secret unlock"
+            >
+              {/* Invisible touch target — subtle tiny dot in dev mode */}
+              <View style={styles.secretDot} />
+            </TouchableOpacity>
+
+            {/* Hidden Unlock Button 2: Secret tap on the score area */}
+            <TouchableOpacity
+              style={styles.hiddenScoreButton}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                triggerUnlock();
+              }}
+              activeOpacity={1}
+            />
+          </Pressable>
+        </GestureDetector>
       </View>
-    </GestureDetector>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  outerContainer: {
+    flex: 1,
+    backgroundColor: '#E6F4FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '100%',
+  },
+  phoneFrame: {
+    width: '100%',
+    maxWidth: 420,
+    height: '100%',
+    maxHeight: 880,
+    backgroundColor: '#B8DEFF',
+    overflow: 'hidden',
+    ...(Platform.OS === 'web'
+      ? {
+          borderRadius: 24,
+          boxShadow: '0 20px 40px rgba(0, 0, 0, 0.15)',
+        }
+      : {}),
+  },
   container: {
     flex: 1,
     backgroundColor: '#B8DEFF',
+    position: 'relative',
   },
-  unlockZone: {
+  // Hidden button at top right corner: 60x60 tap target
+  hiddenUnlockCorner: {
     position: 'absolute',
-    top: 55,
-    left: SCREEN_WIDTH / 2 - 60,
-    width: 120,
-    height: 70,
-    // Completely transparent — no backgroundColor
+    top: 15,
+    right: 15,
+    width: 60,
+    height: 60,
+    zIndex: 20,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    padding: 8,
+  },
+  secretDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)', // nearly invisible subtle dot in the sky
+  },
+  // Secret touch zone right on the score number
+  hiddenScoreButton: {
+    position: 'absolute',
+    top: 35,
+    left: '50%',
+    marginLeft: -50,
+    width: 100,
+    height: 65,
+    zIndex: 15,
   },
 });

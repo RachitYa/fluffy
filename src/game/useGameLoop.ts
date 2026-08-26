@@ -1,25 +1,26 @@
 import { useCallback, useRef } from 'react';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Constants (Gentle & Gradual Progression) ──────────────────────────────────
 export const SCREEN_WIDTH = 390;
 export const SCREEN_HEIGHT = 844;
 
-const GRAVITY = 0.55;          // px/frame² downward acceleration
-const FLAP_IMPULSE = -10.5;    // px/frame upward velocity on tap
-const PIPE_SPEED = 2.8;        // px/frame pipes scroll left
-const PIPE_WIDTH = 62;
-const PIPE_GAP = 185;          // vertical space between top & bottom pipe
-const PIPE_SPAWN_INTERVAL = 90; // frames between new pipe pairs
-const BIRD_X = 90;
-const BIRD_RADIUS = 20;
+export const GRAVITY = 0.28;          // Very gentle falling acceleration
+export const FLAP_IMPULSE = -6.4;     // Soft, controllable upward float
+export const BASE_PIPE_SPEED = 1.25;  // Starts very slow and friendly
+export const PIPE_WIDTH = 58;
+export const PIPE_GAP = 235;          // Extra wide gap so scoring 1, 2, 3 is effortless
+export const PIPE_SPAWN_INTERVAL = 150; // Plenty of room between pipes
+export const FIRST_PIPE_DELAY = 140;   // Generous runway before first pipe appears
+export const BIRD_X = 90;
+export const BIRD_RADIUS = 18;
 
-const GROUND_Y = SCREEN_HEIGHT - 90; // top of the ground strip
+export const GROUND_Y = SCREEN_HEIGHT - 90; // top of the ground strip
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface PipePair {
   id: number;
   x: number;
-  topHeight: number; // height of the top pipe (from top of screen)
+  topHeight: number;
   passed: boolean;
 }
 
@@ -36,7 +37,7 @@ export interface GameState {
 export function makeInitialState(): GameState {
   return {
     phase: 'idle',
-    birdY: SCREEN_HEIGHT / 2 - 40,
+    birdY: SCREEN_HEIGHT / 2 - 50,
     birdVY: 0,
     pipes: [],
     score: 0,
@@ -45,66 +46,76 @@ export function makeInitialState(): GameState {
   };
 }
 
-// ─── Random pipe top-height within safe bounds ────────────────────────────────
+// ─── Pipe top height: centered in friendly reachable zone ──────────────────────
 function randomTopHeight(): number {
-  const minTop = 120;
-  const maxTop = GROUND_Y - PIPE_GAP - 120;
+  const minTop = 130;
+  const maxTop = GROUND_Y - PIPE_GAP - 130;
   return minTop + Math.floor(Math.random() * (maxTop - minTop));
 }
 
-// ─── AABB collision: bird (circle approximated as square) vs pipe rect ────────
+// ─── Forgiving collision check (allows minor clipping without sudden death) ───
 function collides(birdY: number, pipe: PipePair): boolean {
-  const birdLeft = BIRD_X - BIRD_RADIUS;
-  const birdRight = BIRD_X + BIRD_RADIUS;
-  const birdTop = birdY - BIRD_RADIUS;
-  const birdBottom = birdY + BIRD_RADIUS;
+  const buffer = 7; // forgiving margin
+  const birdLeft = BIRD_X - BIRD_RADIUS + buffer;
+  const birdRight = BIRD_X + BIRD_RADIUS - buffer;
+  const birdTop = birdY - BIRD_RADIUS + buffer;
+  const birdBottom = birdY + BIRD_RADIUS - buffer;
 
   const pipeLeft = pipe.x;
   const pipeRight = pipe.x + PIPE_WIDTH;
 
   if (birdRight < pipeLeft || birdLeft > pipeRight) return false;
 
-  // Top pipe: from y=0 to y=pipe.topHeight
+  // Top pipe
   if (birdTop < pipe.topHeight) return true;
-  // Bottom pipe: from y=pipe.topHeight+PIPE_GAP to GROUND_Y
+  // Bottom pipe
   if (birdBottom > pipe.topHeight + PIPE_GAP) return true;
 
   return false;
 }
 
-// ─── Main reducer (called every frame) ───────────────────────────────────────
+// ─── Dynamic speed: starts slow, increases slightly with score ───────────────
+export function getPipeSpeed(score: number): number {
+  // Score 0: 1.25 px/frame -> Score 5: 1.65 -> Score 10: 2.05 -> Max 2.6
+  return Math.min(2.6, BASE_PIPE_SPEED + score * 0.08);
+}
+
+// ─── Main game tick ───────────────────────────────────────────────────────────
 export function tickGame(state: GameState): GameState {
   if (state.phase !== 'playing') return state;
 
   const frameCount = state.frameCount + 1;
+  const currentSpeed = getPipeSpeed(state.score);
 
   // Bird physics
   let birdVY = state.birdVY + GRAVITY;
   let birdY = state.birdY + birdVY;
 
-  // Ground/ceiling clamp → death
-  if (birdY + BIRD_RADIUS >= GROUND_Y || birdY - BIRD_RADIUS <= 0) {
+  // Ground/ceiling clamp
+  if (birdY + BIRD_RADIUS >= GROUND_Y || birdY - BIRD_RADIUS <= 10) {
     return { ...state, birdY, birdVY, frameCount, phase: 'dead' };
   }
 
-  // Spawn new pipe pair
+  // Spawn pipes with initial delay buffer
   let pipes = [...state.pipes];
   let nextPipeId = state.nextPipeId;
-  if (frameCount % PIPE_SPAWN_INTERVAL === 0) {
+  const isSpawnTime = frameCount >= FIRST_PIPE_DELAY && (frameCount - FIRST_PIPE_DELAY) % PIPE_SPAWN_INTERVAL === 0;
+
+  if (isSpawnTime) {
     pipes.push({
       id: nextPipeId++,
-      x: SCREEN_WIDTH + 10,
+      x: SCREEN_WIDTH + 20,
       topHeight: randomTopHeight(),
       passed: false,
     });
   }
 
-  // Scroll pipes, check collision, update score
+  // Scroll pipes, update score
   let score = state.score;
   let isDead = false;
   pipes = pipes
     .map((p) => {
-      const newX = p.x - PIPE_SPEED;
+      const newX = p.x - currentSpeed;
       let passed = p.passed;
       if (!passed && newX + PIPE_WIDTH < BIRD_X) {
         passed = true;
@@ -112,7 +123,7 @@ export function tickGame(state: GameState): GameState {
       }
       return { ...p, x: newX, passed };
     })
-    .filter((p) => p.x + PIPE_WIDTH > -20); // remove off-screen pipes
+    .filter((p) => p.x + PIPE_WIDTH > -40);
 
   // Collision check
   for (const pipe of pipes) {
@@ -130,11 +141,6 @@ export function tickGame(state: GameState): GameState {
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
-/**
- * Returns a mutable ref holding the game state and action dispatchers.
- * The game loop calls `tick()` every frame; UI subscribes to the ref via
- * a Skia shared value to avoid React re-renders in the hot path.
- */
 export function useGameActions(
   stateRef: React.MutableRefObject<GameState>,
   onScoreChange: (score: number) => void,
@@ -167,5 +173,3 @@ export function useGameActions(
 
   return { tick, flap, reset };
 }
-
-export { BIRD_X, BIRD_RADIUS, PIPE_WIDTH, PIPE_GAP, GROUND_Y, SCREEN_WIDTH, SCREEN_HEIGHT };

@@ -1,0 +1,1657 @@
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TextInput,
+  TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  Clipboard,
+  Alert,
+  StatusBar,
+  Modal,
+  Pressable,
+  Image,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { format } from 'date-fns';
+import { useAuth } from '../hooks/useAuth';
+import { useRoom } from '../hooks/useRoom';
+import { useMessages, Message, ReplyInfo, PollData } from '../hooks/useMessages';
+import { useTyping } from '../hooks/useTyping';
+import { useVoiceCall } from '../hooks/useVoiceCall';
+import { useWatchParty } from '../hooks/useWatchParty';
+import { useTheme } from '../hooks/useTheme';
+import VoiceCallModal from '../components/VoiceCallModal';
+import WatchPartyPlayer from '../components/WatchPartyPlayer';
+import RichLinkPreview, { extractUrl, extractYouTubeId } from '../components/RichLinkPreview';
+import PollMessageCard from '../components/PollMessageCard';
+import CreatePollModal from '../components/CreatePollModal';
+import GifPickerModal from '../components/GifPickerModal';
+import EphemeralViewOnce from '../components/EphemeralViewOnce';
+import DynamicHeaderPill from '../components/DynamicHeaderPill';
+import StarredMessagesModal, { toggleStarMessage } from '../components/StarredMessagesModal';
+import SearchMessagesBar from '../components/SearchMessagesBar';
+import ThemeCustomizerModal from '../components/ThemeCustomizerModal';
+import ImageViewerModal from '../components/ImageViewerModal';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+
+interface Props {
+  passkey: string;
+  onBack: () => void;
+  onBackToGame?: () => void;
+}
+
+const QUICK_EMOJIS = ['❤️', '😂', '🔥', '😮', '😢', '👍'];
+
+const AVATAR_COLORS = ['#5865F2', '#23A55A', '#FEE75C', '#EB459E', '#ED4245', '#00A8FC', '#E67E22', '#9B59B6'];
+function getAvatarColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+// ─── Voice Note Waveform Visualizer ───────────────────────────────────────────
+function VoiceNoteBubble({
+  duration,
+  isMe,
+  timeStr,
+  isReadByOthers,
+}: {
+  duration: number;
+  isMe: boolean;
+  timeStr: string;
+  isReadByOthers: boolean;
+}) {
+  const { theme } = useTheme();
+  const [playing, setPlaying] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const durSec = duration || 4;
+
+  useEffect(() => {
+    let timer: any;
+    if (playing) {
+      timer = setInterval(() => {
+        setElapsed((prev) => {
+          if (prev >= durSec) {
+            setPlaying(false);
+            return 0;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } else {
+      setElapsed(0);
+    }
+    return () => clearInterval(timer);
+  }, [playing, durSec]);
+
+  const togglePlay = () => setPlaying(!playing);
+
+  return (
+    <View
+      style={[
+        styles.bubbleBase,
+        isMe
+          ? [styles.myBubble, { backgroundColor: theme.accent }]
+          : [styles.theirBubble, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }],
+        styles.voiceBubbleLayout,
+      ]}
+    >
+      <View style={styles.voiceTopRow}>
+        <TouchableOpacity
+          onPress={togglePlay}
+          style={[
+            styles.voicePlayBtn,
+            isMe ? styles.voicePlayBtnMe : [styles.voicePlayBtnThem, { backgroundColor: theme.accent }],
+          ]}
+          activeOpacity={0.75}
+        >
+          <Ionicons
+            name={playing ? 'pause' : 'play'}
+            size={13}
+            color={isMe ? theme.accent : '#FFFFFF'}
+            style={!playing ? { marginLeft: 2 } : {}}
+          />
+        </TouchableOpacity>
+
+        <View style={styles.waveformRow}>
+          {[14, 22, 10, 26, 18, 8, 24, 16, 28, 12, 20, 15, 25, 9, 19].map((h, i) => (
+            <View
+              key={i}
+              style={[
+                styles.waveBar,
+                { height: playing ? Math.max(6, ((h + elapsed * 7 + i * 3) % 28) + 6) : h },
+                isMe ? styles.waveBarMe : [styles.waveBarThem, { backgroundColor: theme.accent }],
+              ]}
+            />
+          ))}
+        </View>
+
+        <Text style={[styles.voiceDuration, isMe ? styles.voiceDurMe : { color: theme.textMuted }]}>
+          {playing ? `0:0${elapsed}` : `0:0${durSec}`}
+        </Text>
+      </View>
+
+      <View style={styles.bubbleFooter}>
+        <Text style={[styles.timeText, isMe ? styles.myTime : styles.theirTime]}>{timeStr}</Text>
+        {isMe && (
+          <View style={styles.checkIconWrap}>
+            {isReadByOthers ? (
+              <Ionicons name="checkmark-done" size={13} color="#23A55A" />
+            ) : (
+              <Feather name="check" size={12} color="rgba(255, 255, 255, 0.7)" />
+            )}
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+// ─── Single Message Item Component ────────────────────────────────────────────
+function MessageBubbleItem({
+  msg,
+  isMe,
+  showSenderHeader,
+  onDoubleTap,
+  onOpenActions,
+  onReply,
+  onPin,
+  onStar,
+  onEdit,
+  onDelete,
+  onReactionPress,
+  onQuickReact,
+  onVotePoll,
+  onOpenViewOnce,
+  onOpenImage,
+}: {
+  msg: Message;
+  isMe: boolean;
+  showSenderHeader: boolean;
+  onDoubleTap: (msg: Message) => void;
+  onOpenActions: (msg: Message) => void;
+  onReply: (msg: Message) => void;
+  onPin: (msg: Message) => void;
+  onStar: (msg: Message) => void;
+  onEdit: (msg: Message) => void;
+  onDelete: (msg: Message) => void;
+  onReactionPress: (msg: Message, emoji: string) => void;
+  onQuickReact: (msg: Message, emoji: string) => void;
+  onVotePoll: (msgId: string, optId: string) => void;
+  onOpenViewOnce: (msg: Message) => void;
+  onOpenImage: (imageUrl: string, senderName: string) => void;
+}) {
+  const { theme } = useTheme();
+  const [isHovered, setIsHovered] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const lastTapRef = useRef<number>(0);
+
+  const senderName = msg.senderName || 'Anonymous';
+  const initial = senderName.charAt(0).toUpperCase();
+  const avatarBg = getAvatarColor(senderName);
+  const timeStr = msg.createdAt ? format(msg.createdAt, 'h:mm a') : 'Just now';
+
+  const handleTap = () => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 320) {
+      onDoubleTap(msg);
+      lastTapRef.current = 0;
+    } else {
+      lastTapRef.current = now;
+    }
+  };
+
+  const isDeleted = msg.isDeleted;
+  const isReadByOthers = (msg.readBy || []).length > 1;
+
+  return (
+    <View
+      style={[styles.messageRowWrap, isMe ? styles.rowWrapMe : styles.rowWrapThem]}
+      // @ts-ignore - Web hover
+      onMouseEnter={() => setIsHovered(true)}
+      // @ts-ignore
+      onMouseLeave={() => {
+        setIsHovered(false);
+        setShowEmojiPicker(false);
+      }}
+      // @ts-ignore - Web right-click
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onOpenActions(msg);
+      }}
+    >
+      {!isMe && (
+        showSenderHeader ? (
+          <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+            {msg.senderAvatar ? (
+              <Image source={{ uri: msg.senderAvatar }} style={styles.avatarImg} />
+            ) : (
+              <Text style={styles.avatarText}>{initial}</Text>
+            )}
+          </View>
+        ) : (
+          <View style={styles.avatarPlaceholder} />
+        )
+      )}
+
+      <View style={[styles.bubbleCol, isMe ? styles.bubbleColMe : styles.bubbleColThem]}>
+        {!isMe && showSenderHeader && (
+          <Text style={[styles.theirSenderName, { color: avatarBg }]}>{senderName}</Text>
+        )}
+
+        <View style={styles.bubbleContainerWithToolbar}>
+          {/* ── Hover Action Toolbar ────────────────────────────────────────── */}
+          {(isHovered || showEmojiPicker) && !isDeleted && (
+            <View
+              style={[
+                styles.hoverToolbar,
+                { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle },
+                isMe ? styles.hoverToolbarMe : styles.hoverToolbarThem,
+              ]}
+            >
+              <TouchableOpacity
+                style={styles.toolBtn}
+                onPress={() => onQuickReact(msg, '❤️')}
+                accessibilityLabel="React Heart"
+              >
+                <Ionicons name="heart" size={13} color="#EF4444" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.toolBtn}
+                onPress={() => setShowEmojiPicker(!showEmojiPicker)}
+                accessibilityLabel="Add Reaction"
+              >
+                <Feather name="smile" size={13} color={theme.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.toolBtn}
+                onPress={() => onReply(msg)}
+                accessibilityLabel="Reply"
+              >
+                <Feather name="corner-up-left" size={13} color={theme.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.toolBtn}
+                onPress={() => onStar(msg)}
+                accessibilityLabel="Star"
+              >
+                <Ionicons name="star-outline" size={13} color="#FEE75C" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.toolBtn}
+                onPress={() => onPin(msg)}
+                accessibilityLabel="Pin"
+              >
+                <MaterialCommunityIcons name="pin-outline" size={13} color={theme.textMuted} />
+              </TouchableOpacity>
+
+              {isMe && (
+                <TouchableOpacity
+                  style={styles.toolBtn}
+                  onPress={() => onEdit(msg)}
+                  accessibilityLabel="Edit"
+                >
+                  <Feather name="edit-3" size={13} color={theme.textMuted} />
+                </TouchableOpacity>
+              )}
+
+              {isMe && (
+                <TouchableOpacity
+                  style={styles.toolBtn}
+                  onPress={() => onDelete(msg)}
+                  accessibilityLabel="Delete"
+                >
+                  <Feather name="trash-2" size={13} color="#EF4444" />
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {/* ── Pop-out 6-Emoji Reaction Bar ─────────────────────────────── */}
+          {showEmojiPicker && (
+            <View
+              style={[
+                styles.floatingEmojiBar,
+                { backgroundColor: theme.bgCard, borderColor: theme.accent },
+                isMe ? styles.floatingEmojiMe : styles.floatingEmojiThem,
+              ]}
+            >
+              {QUICK_EMOJIS.map((emoji) => (
+                <TouchableOpacity
+                  key={emoji}
+                  onPress={() => {
+                    onQuickReact(msg, emoji);
+                    setShowEmojiPicker(false);
+                  }}
+                  style={styles.quickEmojiBtn}
+                >
+                  <Text style={styles.quickEmojiText}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {/* ── Message Bubble Types ─────────────────────────────────────── */}
+          {msg.isViewOnce ? (
+            /* Ephemeral View Once Message */
+            <TouchableOpacity
+              style={[styles.viewOnceBubble, { borderColor: theme.accent, backgroundColor: theme.bgCard }]}
+              onPress={() => onOpenViewOnce(msg)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="eye-outline" size={16} color={theme.accent} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.viewOnceTitle, { color: theme.accent }]}>View Once Note</Text>
+                <Text style={[styles.viewOnceSub, { color: theme.textMuted }]}>Tap to reveal (5s countdown)</Text>
+              </View>
+              <Feather name="lock" size={12} color={theme.textMuted} />
+            </TouchableOpacity>
+          ) : msg.poll ? (
+            /* Interactive Poll Message */
+            <PollMessageCard
+              poll={msg.poll}
+              userUid={isMe ? 'me' : 'other'}
+              onVote={(optId) => onVotePoll(msg.id, optId)}
+              isMe={isMe}
+            />
+          ) : msg.imageUrl ? (
+            /* Photo / Image Message */
+            <TouchableOpacity
+              style={[styles.imageBubble, { borderColor: theme.borderSubtle, backgroundColor: theme.bgCard }]}
+              onPress={() => onOpenImage(msg.imageUrl!, msg.senderName)}
+              activeOpacity={0.85}
+            >
+              <Image source={{ uri: msg.imageUrl }} style={styles.bubblePhoto} resizeMode="cover" />
+              <View style={styles.bubbleFooterOverlay}>
+                <Text style={styles.photoTimeText}>{timeStr}</Text>
+                {isMe && (
+                  <View style={{ marginLeft: 3 }}>
+                    <Ionicons name="checkmark-done" size={12} color="#23A55A" />
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+          ) : msg.gifUrl ? (
+            /* Animated GIF Bubble */
+            <View style={[styles.gifBubble, { borderColor: theme.borderSubtle }]}>
+              <Image source={{ uri: msg.gifUrl }} style={styles.gifBubbleImage} resizeMode="cover" />
+              <View style={styles.bubbleFooter}>
+                <Text style={[styles.timeText, styles.theirTime]}>{timeStr}</Text>
+              </View>
+            </View>
+          ) : msg.type === 'voice' ? (
+            /* Interactive Voice Note Waveform Bubble */
+            <VoiceNoteBubble
+              duration={msg.voiceDuration || 4}
+              isMe={isMe}
+              timeStr={timeStr}
+              isReadByOthers={isReadByOthers}
+            />
+          ) : (
+            /* Normal Text Message Bubble */
+            <Pressable
+              onPress={handleTap}
+              onLongPress={() => onOpenActions(msg)}
+              style={[
+                styles.bubbleBase,
+                isMe ? [styles.myBubble, { backgroundColor: theme.accent }] : [styles.theirBubble, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }],
+                msg.isVanish && styles.vanishBubbleGlow,
+              ]}
+            >
+              {msg.replyTo && (
+                <View style={[styles.quoteBox, isMe ? styles.quoteBoxMe : styles.quoteBoxThem]}>
+                  <Text style={[styles.quoteAuthor, isMe ? styles.quoteAuthorMe : { color: theme.accent }]}>
+                    {msg.replyTo.senderName}
+                  </Text>
+                  <Text style={styles.quoteText} numberOfLines={1}>
+                    {msg.replyTo.text}
+                  </Text>
+                </View>
+              )}
+
+              <Text
+                style={[
+                  styles.messageText,
+                  isMe ? styles.myText : { color: theme.textPrimary },
+                  isDeleted && styles.deletedText,
+                ]}
+              >
+                {msg.text}
+              </Text>
+
+              {/* Rich OpenGraph link preview if URL detected */}
+              {!isDeleted && extractUrl(msg.text) && (
+                <RichLinkPreview text={msg.text} />
+              )}
+
+              {/* Footer */}
+              <View style={styles.bubbleFooter}>
+                {msg.isVanish && (
+                  <Text style={styles.vanishBadge}>vanish</Text>
+                )}
+                {msg.isEdited && !isDeleted && (
+                  <Text style={[styles.editedBadge, isMe && styles.editedBadgeMe]}>edited</Text>
+                )}
+                <Text style={[styles.timeText, isMe ? styles.myTime : styles.theirTime]}>{timeStr}</Text>
+                {isMe && !isDeleted && (
+                  <View style={styles.checkIconWrap}>
+                    {isReadByOthers ? (
+                      <Ionicons name="checkmark-done" size={13} color="#23A55A" />
+                    ) : (
+                      <Feather name="check" size={12} color="rgba(255, 255, 255, 0.7)" />
+                    )}
+                  </View>
+                )}
+              </View>
+            </Pressable>
+          )}
+
+          {!isDeleted && !msg.poll && (
+            <TouchableOpacity
+              onPress={() => onOpenActions(msg)}
+              style={styles.moreOptionsTrigger}
+              activeOpacity={0.6}
+            >
+              <Feather name="more-horizontal" size={14} color="#6B7280" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Reaction Badges */}
+        {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+          <View style={[styles.reactionsRow, isMe ? styles.reactionsMe : styles.reactionsThem]}>
+            {Object.entries(msg.reactions).map(([emoji, users]) => (
+              <TouchableOpacity
+                key={emoji}
+                style={[styles.reactionBadge, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }]}
+                onPress={() => onReactionPress(msg, emoji)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.reactionEmoji}>{emoji}</Text>
+                {users.length > 1 && <Text style={[styles.reactionCount, { color: theme.textPrimary }]}>{users.length}</Text>}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+// ─── Main ChatScreen Component ────────────────────────────────────────────────
+export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
+  const { theme } = useTheme();
+  const { uid, displayName, photoURL } = useAuth();
+  const { room, loading: roomLoading, pinMessage } = useRoom(passkey);
+  const {
+    messages,
+    loading: msgsLoading,
+    sendMessage,
+    toggleReaction,
+    editMessage,
+    deleteMessage,
+    markAsRead,
+    votePoll,
+    openViewOnce,
+    wipeVanishMessages,
+  } = useMessages(passkey, uid, displayName, photoURL);
+  const { typingUsers, setTyping } = useTyping(passkey, uid, displayName);
+
+  // WebRTC Voice
+  const {
+    isInCall,
+    isMuted: isVoiceMuted,
+    isVideoOn,
+    isDeafened,
+    participants: voiceParticipants,
+    localStream,
+    joinCall,
+    leaveCall,
+    toggleMute: toggleVoiceMute,
+    toggleVideo,
+    toggleDeafen,
+  } = useVoiceCall(passkey, uid, displayName);
+
+  // Watch Party
+  const { watchParty, startWatchParty, updatePlayback, seekPlayback, closeWatchParty } =
+    useWatchParty(passkey, uid, displayName);
+
+  // Modals & States
+  const [voiceModalVisible, setVoiceModalVisible] = useState(false);
+  const [voiceModalMinimized, setVoiceModalMinimized] = useState(false);
+  const [vanishMode, setVanishMode] = useState(false);
+  const [viewOnceActive, setViewOnceActive] = useState(false);
+
+  const [pollModalVisible, setPollModalVisible] = useState(false);
+  const [gifModalVisible, setGifModalVisible] = useState(false);
+  const [starredModalVisible, setStarredModalVisible] = useState(false);
+  const [themeModalVisible, setThemeModalVisible] = useState(false);
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [activeViewOnceMsg, setActiveViewOnceMsg] = useState<Message | null>(null);
+  const [viewingImage, setViewingImage] = useState<{ url: string; sender: string } | null>(null);
+
+  const [inputText, setInputText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<ReplyInfo | null>(null);
+  const [editingMsg, setEditingMsg] = useState<Message | null>(null);
+  const [selectedMsg, setSelectedMsg] = useState<Message | null>(null);
+  const [actionMenuVisible, setActionMenuVisible] = useState(false);
+  const [attachMenuVisible, setAttachMenuVisible] = useState(false);
+
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+
+  const flatListRef = useRef<FlatList>(null);
+  const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const isAdmin = room?.createdBy === uid;
+  const roomTitle = room?.displayName || passkey;
+
+  useEffect(() => {
+    if (messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      markAsRead(lastMsg.id);
+    }
+  }, [messages, markAsRead]);
+
+  // Clean up vanish messages on exit
+  useEffect(() => {
+    return () => {
+      wipeVanishMessages().catch(() => {});
+    };
+  }, [wipeVanishMessages]);
+
+  const handleInputChange = (text: string) => {
+    setInputText(text);
+    setTyping(text.length > 0);
+  };
+
+  // ── Send Message ───────────────────────────────────────────────────────────
+  const handleSend = useCallback(async () => {
+    const text = inputText.trim();
+    if (!text || sending) return;
+
+    if (editingMsg) {
+      await editMessage(editingMsg.id, text);
+      setEditingMsg(null);
+      setInputText('');
+      setTyping(false);
+      return;
+    }
+
+    const ytId = extractYouTubeId(text);
+
+    setInputText('');
+    setSending(true);
+    setTyping(false);
+
+    try {
+      await sendMessage(text, replyingTo, 'text', {
+        isVanish: vanishMode,
+        isViewOnce: viewOnceActive,
+        senderAvatar: photoURL || undefined,
+      });
+
+      if (ytId && !watchParty) {
+        startWatchParty(ytId, 'Shared YouTube Video');
+      }
+
+      setReplyingTo(null);
+      setViewOnceActive(false);
+    } catch (e: any) {
+      Alert.alert('Error', 'Failed to send message');
+    } finally {
+      setSending(false);
+    }
+  }, [inputText, sending, editingMsg, replyingTo, vanishMode, viewOnceActive, watchParty, photoURL, startWatchParty, editMessage, sendMessage, setTyping]);
+
+  // ── Photo Upload Handler ───────────────────────────────────────────────────
+  const handlePhotoUpload = (e: any) => {
+    if (Platform.OS === 'web') {
+      const file = e.target.files?.[0];
+      if (file) {
+        if (file.size > 3 * 1024 * 1024) {
+          Alert.alert('Image too large', 'Please choose a photo under 3MB.');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = async () => {
+          if (reader.result) {
+            setAttachMenuVisible(false);
+            await sendMessage('📷 Photo', null, 'image', {
+              imageUrl: reader.result as string,
+              isVanish: vanishMode,
+              isViewOnce: viewOnceActive,
+              senderAvatar: photoURL || undefined,
+            });
+            setViewOnceActive(false);
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  };
+
+  // ── Voice Recording ────────────────────────────────────────────────────────
+  const startVoiceRecording = () => {
+    setIsRecordingVoice(true);
+    setRecordingSeconds(0);
+    voiceTimerRef.current = setInterval(() => {
+      setRecordingSeconds((s) => s + 1);
+    }, 1000);
+  };
+
+  const cancelVoiceRecording = () => {
+    if (voiceTimerRef.current) clearInterval(voiceTimerRef.current);
+    setIsRecordingVoice(false);
+    setRecordingSeconds(0);
+  };
+
+  const sendVoiceRecording = async () => {
+    if (voiceTimerRef.current) clearInterval(voiceTimerRef.current);
+    const duration = Math.max(1, recordingSeconds);
+    setIsRecordingVoice(false);
+    setRecordingSeconds(0);
+    await sendMessage('🎤 Voice Note', replyingTo, 'voice', { voiceDuration: duration, senderAvatar: photoURL || undefined });
+    setReplyingTo(null);
+  };
+
+  const handleSendPoll = async (poll: PollData) => {
+    await sendMessage(`📊 Poll: ${poll.question}`, null, 'poll', { poll, senderAvatar: photoURL || undefined });
+  };
+
+  const handleSendGif = async (gifUrl: string) => {
+    await sendMessage('GIF', null, 'gif', { gifUrl, senderAvatar: photoURL || undefined });
+  };
+
+  const handleQuickReact = (msg: Message, emoji: string) => {
+    if (displayName) toggleReaction(msg.id, emoji, displayName);
+  };
+
+  const handleDoubleTap = (msg: Message) => {
+    handleQuickReact(msg, '❤️');
+  };
+
+  const handleStarAction = async (msg: Message) => {
+    const isStarred = await toggleStarMessage(passkey, {
+      id: msg.id,
+      text: msg.text,
+      senderName: msg.senderName,
+    });
+    Alert.alert(isStarred ? 'Saved to Starred!' : 'Removed from Starred');
+  };
+
+  const copyPasskey = useCallback(() => {
+    Clipboard.setString(passkey);
+    Alert.alert('Passkey Copied!', `"${passkey}" copied to clipboard.`);
+  }, [passkey]);
+
+  const displayedMessages = searchQuery.trim()
+    ? messages.filter((m) => m.text.toLowerCase().includes(searchQuery.toLowerCase()))
+    : messages;
+
+  if (roomLoading) {
+    return (
+      <View style={[styles.loadingContainer, { backgroundColor: theme.bgDark }]}>
+        <ActivityIndicator color={theme.accent} size="large" />
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView
+      style={[
+        styles.container,
+        { backgroundColor: vanishMode ? '#100A17' : theme.bgDark },
+        vanishMode && styles.vanishBorderGlow,
+      ]}
+      edges={['top']}
+    >
+      <StatusBar barStyle="light-content" />
+
+      {/* ── Top Header ────────────────────────────────────────────────────── */}
+      <View style={[styles.header, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]}>
+        <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
+          <Feather name="chevron-left" size={24} color="#D1D5DB" />
+        </TouchableOpacity>
+
+        <View style={styles.headerCenter}>
+          <View style={styles.titleRow}>
+            <Feather name="hash" size={15} color="#80848E" />
+            <Text style={[styles.channelName, { color: theme.textPrimary }]} numberOfLines={1}>
+              {roomTitle}
+            </Text>
+            {isAdmin && (
+              <View style={styles.adminBadge}>
+                <MaterialCommunityIcons name="crown" size={11} color="#FEE75C" />
+                <Text style={styles.adminBadgeText}>ADMIN</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Dynamic Island Status Pill */}
+          <DynamicHeaderPill
+            onlineCount={1}
+            voiceCount={voiceParticipants.length}
+            typingUsers={typingUsers}
+          />
+        </View>
+
+        {/* Action icons */}
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={[styles.headerActionBtn, { backgroundColor: theme.bgCard }]}
+            onPress={() => setSearchVisible(!searchVisible)}
+            activeOpacity={0.75}
+          >
+            <Feather name="search" size={14} color="#D1D5DB" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.headerActionBtn, { backgroundColor: theme.bgCard }]}
+            onPress={() => setStarredModalVisible(true)}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="star-outline" size={14} color="#FEE75C" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.headerActionBtn,
+              { backgroundColor: theme.bgCard },
+              vanishMode && { backgroundColor: '#9333EA' },
+            ]}
+            onPress={() => setVanishMode(!vanishMode)}
+            activeOpacity={0.75}
+            accessibilityLabel="Vanish Mode"
+          >
+            <Ionicons name="eye-off-outline" size={14} color={vanishMode ? '#FFFFFF' : '#D1D5DB'} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.headerActionBtn,
+              { backgroundColor: theme.bgCard },
+              isInCall && { backgroundColor: '#23A55A' },
+            ]}
+            onPress={() => {
+              if (!isInCall) joinCall(false);
+              setVoiceModalVisible(true);
+              setVoiceModalMinimized(false);
+            }}
+            activeOpacity={0.75}
+          >
+            <Feather name="mic" size={14} color={isInCall ? '#FFFFFF' : '#D1D5DB'} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.headerActionBtn, { backgroundColor: theme.bgCard }]}
+            onPress={() => setThemeModalVisible(true)}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="color-palette-outline" size={14} color="#D1D5DB" />
+          </TouchableOpacity>
+
+          {onBackToGame && (
+            <TouchableOpacity
+              onPress={onBackToGame}
+              style={[styles.panicBtn, { backgroundColor: theme.bgCard }]}
+              activeOpacity={0.75}
+            >
+              <MaterialCommunityIcons name="gamepad-variant-outline" size={15} color="#D1D5DB" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* ── Search Bar ────────────────────────────────────────────────────── */}
+      <SearchMessagesBar
+        visible={searchVisible}
+        query={searchQuery}
+        onChangeQuery={setSearchQuery}
+        onClose={() => {
+          setSearchVisible(false);
+          setSearchQuery('');
+        }}
+        matchCount={displayedMessages.length}
+      />
+
+      {/* ── Synced YouTube Watch Party Player ─────────────────────────────── */}
+      {watchParty && (
+        <WatchPartyPlayer
+          watchParty={watchParty}
+          userUid={uid}
+          onUpdatePlayback={updatePlayback}
+          onSeek={seekPlayback}
+          onClose={closeWatchParty}
+        />
+      )}
+
+      {/* ── Pinned Message Banner ─────────────────────────────────────────── */}
+      {room?.pinnedMessage && (
+        <View style={[styles.pinnedBanner, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]}>
+          <MaterialCommunityIcons name="pin-outline" size={15} color={theme.accent} />
+          <View style={styles.pinnedContent}>
+            <Text style={[styles.pinnedTitle, { color: theme.accent }]}>Pinned by {room.pinnedMessage.senderName}</Text>
+            <Text style={[styles.pinnedSnippet, { color: theme.textPrimary }]} numberOfLines={1}>
+              {room.pinnedMessage.text}
+            </Text>
+          </View>
+          {isAdmin && (
+            <TouchableOpacity onPress={() => pinMessage(null)} style={styles.unpinBtn} activeOpacity={0.7}>
+              <Feather name="x" size={14} color={theme.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* ── Vanish Mode Glow Banner ───────────────────────────────────────── */}
+      {vanishMode && (
+        <View style={styles.vanishStatusBanner}>
+          <Ionicons name="eye-off" size={13} color="#C084FC" />
+          <Text style={styles.vanishStatusText}>
+            Vanish Mode Active · Messages disappear when you leave
+          </Text>
+        </View>
+      )}
+
+      {/* ── Messages List ─────────────────────────────────────────────────── */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+      >
+        {msgsLoading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator color={theme.accent} />
+          </View>
+        ) : displayedMessages.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <View style={[styles.emptyHashCircle, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]}>
+              <Feather name="hash" size={28} color={theme.accent} />
+            </View>
+            <Text style={[styles.emptyWelcome, { color: theme.textPrimary }]}>Welcome to #{roomTitle}!</Text>
+            <Text style={[styles.emptySubtext, { color: theme.textMuted }]}>
+              This is the start of the #{roomTitle} channel. Hover or tap any message to react, reply, star, or pin!
+            </Text>
+            <TouchableOpacity onPress={copyPasskey} style={[styles.inviteCard, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]} activeOpacity={0.8}>
+              <Feather name="key" size={13} color={theme.accent} />
+              <Text style={[styles.inviteCardKey, { color: theme.accent }]}>{passkey}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <FlatList
+            ref={flatListRef}
+            data={displayedMessages}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.messageList}
+            renderItem={({ item, index }) => {
+              const prevMsg = index > 0 ? displayedMessages[index - 1] : null;
+              const isSameSender = prevMsg && prevMsg.senderUid === item.senderUid;
+              const showSenderHeader = !isSameSender;
+
+              return (
+                <MessageBubbleItem
+                  msg={item}
+                  isMe={item.senderUid === uid}
+                  showSenderHeader={showSenderHeader}
+                  onDoubleTap={handleDoubleTap}
+                  onOpenActions={(m) => {
+                    setSelectedMsg(m);
+                    setActionMenuVisible(true);
+                  }}
+                  onReply={(m) => setReplyingTo({ id: m.id, text: m.text, senderName: m.senderName })}
+                  onPin={(m) => pinMessage({ id: m.id, text: m.text, senderName: m.senderName })}
+                  onStar={handleStarAction}
+                  onEdit={(m) => {
+                    setEditingMsg(m);
+                    setInputText(m.text);
+                  }}
+                  onDelete={(m) => deleteMessage(m.id)}
+                  onReactionPress={(m, emoji) => displayName && toggleReaction(m.id, emoji, displayName)}
+                  onQuickReact={handleQuickReact}
+                  onVotePoll={(msgId, optId) => uid && votePoll(msgId, optId, uid)}
+                  onOpenViewOnce={(m) => {
+                    setActiveViewOnceMsg(m);
+                    if (uid) openViewOnce(m.id, uid);
+                  }}
+                  onOpenImage={(url, sender) => setViewingImage({ url, sender })}
+                />
+              );
+            }}
+          />
+        )}
+
+        {/* ── Replying / Editing Preview Banner ─────────────────────────────── */}
+        {replyingTo && (
+          <View style={[styles.replyBanner, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]}>
+            <View style={[styles.replyBarAccent, { backgroundColor: theme.accent }]} />
+            <Feather name="corner-up-left" size={13} color={theme.accent} style={{ marginRight: 8 }} />
+            <View style={styles.replyMeta}>
+              <Text style={[styles.replyHeader, { color: theme.accent }]}>Replying to {replyingTo.senderName}</Text>
+              <Text style={[styles.replyPreview, { color: theme.textPrimary }]} numberOfLines={1}>
+                {replyingTo.text}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setReplyingTo(null)} style={styles.closeReplyBtn}>
+              <Feather name="x" size={14} color={theme.textMuted} />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {editingMsg && (
+          <View style={[styles.replyBanner, { backgroundColor: '#2B2516', borderColor: '#FEE75C' }]}>
+            <View style={[styles.replyBarAccent, { backgroundColor: '#FEE75C' }]} />
+            <Feather name="edit-3" size={13} color="#FEE75C" style={{ marginRight: 8 }} />
+            <View style={styles.replyMeta}>
+              <Text style={[styles.replyHeader, { color: '#FEE75C' }]}>Editing Message</Text>
+              <Text style={[styles.replyPreview, { color: theme.textPrimary }]} numberOfLines={1}>
+                {editingMsg.text}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => {
+                setEditingMsg(null);
+                setInputText('');
+              }}
+              style={styles.closeReplyBtn}
+            >
+              <Feather name="x" size={14} color={theme.textMuted} />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {viewOnceActive && (
+          <View style={styles.viewOnceNoticeBar}>
+            <Ionicons name="eye-off" size={12} color="#EF4444" />
+            <Text style={styles.viewOnceNoticeText}>Sending as 1-Time Ephemeral Note (5s self-destruct)</Text>
+            <TouchableOpacity onPress={() => setViewOnceActive(false)}>
+              <Feather name="x" size={12} color="#EF4444" />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── Input Bar ─────────────────────────────────────────────────────── */}
+        <SafeAreaView edges={['bottom']} style={[styles.inputContainer, { backgroundColor: theme.bgDark }]}>
+          {isRecordingVoice ? (
+            <View style={[styles.recordingContainer, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]}>
+              <View style={styles.recordingPill}>
+                <View style={styles.recordingDot} />
+                <Text style={[styles.recordingTimer, { color: theme.textPrimary }]}>
+                  Recording 0:{recordingSeconds < 10 ? `0${recordingSeconds}` : recordingSeconds}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={cancelVoiceRecording} style={styles.cancelRecBtn}>
+                <Text style={styles.cancelRecText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={sendVoiceRecording} style={[styles.sendVoiceBtn, { backgroundColor: theme.accent }]}>
+                <Feather name="arrow-up" size={16} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={[styles.inputPill, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]}>
+              <TouchableOpacity
+                style={[styles.attachBtn, { backgroundColor: theme.bgCard }]}
+                onPress={() => setAttachMenuVisible(!attachMenuVisible)}
+                activeOpacity={0.7}
+              >
+                <Feather name="plus" size={16} color="#D1D5DB" />
+              </TouchableOpacity>
+
+              <TextInput
+                style={[styles.input, { color: theme.textPrimary }]}
+                placeholder={editingMsg ? 'Edit message...' : `Message #${roomTitle}`}
+                placeholderTextColor={theme.textMuted}
+                value={inputText}
+                onChangeText={handleInputChange}
+                multiline
+                maxLength={2000}
+                onSubmitEditing={handleSend}
+              />
+
+              {inputText.trim() ? (
+                <TouchableOpacity
+                  style={[styles.sendBtn, { backgroundColor: theme.accent }, sending && styles.sendBtnDisabled]}
+                  onPress={handleSend}
+                  disabled={sending}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="arrow-up" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.micBtn, { backgroundColor: theme.bgCard }]}
+                  onPress={startVoiceRecording}
+                  activeOpacity={0.75}
+                  accessibilityLabel="Voice note"
+                >
+                  <Feather name="mic" size={15} color="#D1D5DB" />
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {/* ── Attachment Popup Dock ──────────────────────────────────────── */}
+          {attachMenuVisible && (
+            <View style={[styles.attachmentDock, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }]}>
+              {/* 1. Photo / Image Picker */}
+              {Platform.OS === 'web' && (
+                <label style={{ cursor: 'pointer' } as any}>
+                  <View style={styles.dockItem}>
+                    <View style={[styles.dockIconCircle, { backgroundColor: '#8B5CF6' }]}>
+                      <Feather name="image" size={16} color="#FFFFFF" />
+                    </View>
+                    <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Photo</Text>
+                  </View>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePhotoUpload}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+              )}
+
+              {/* 2. Poll */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setPollModalVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#3B82F6' }]}>
+                  <Feather name="bar-chart-2" size={16} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Poll</Text>
+              </TouchableOpacity>
+
+              {/* 3. GIF */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setGifModalVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#10B981' }]}>
+                  <MaterialCommunityIcons name="file-gif-box" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>GIF</Text>
+              </TouchableOpacity>
+
+              {/* 4. View Once Note */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setViewOnceActive(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#EC4899' }]}>
+                  <Ionicons name="eye-off-outline" size={16} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>View Once</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+
+      {/* ── Action Menu Modal ──────────────────────────────────────────────── */}
+      <Modal visible={actionMenuVisible} transparent animationType="fade">
+        <Pressable style={styles.menuOverlay} onPress={() => setActionMenuVisible(false)}>
+          <Pressable style={[styles.menuModal, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]} onPress={(e) => e.stopPropagation()}>
+            <Text style={[styles.menuHeaderTitle, { color: theme.textPrimary }]}>Message Actions</Text>
+
+            <View style={[styles.emojiBar, { backgroundColor: theme.bgDark, borderColor: theme.borderSubtle }]}>
+              {QUICK_EMOJIS.map((emoji) => (
+                <TouchableOpacity
+                  key={emoji}
+                  onPress={() => {
+                    if (selectedMsg) handleQuickReact(selectedMsg, emoji);
+                    setActionMenuVisible(false);
+                  }}
+                  style={styles.emojiBtn}
+                  activeOpacity={0.6}
+                >
+                  <Text style={styles.emojiText}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.menuOptionsList}>
+              <TouchableOpacity
+                style={[styles.menuItem, { backgroundColor: theme.bgCard }]}
+                onPress={() => {
+                  if (selectedMsg) setReplyingTo({ id: selectedMsg.id, text: selectedMsg.text, senderName: selectedMsg.senderName });
+                  setActionMenuVisible(false);
+                }}
+              >
+                <Feather name="corner-up-left" size={16} color={theme.accent} style={{ marginRight: 12 }} />
+                <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Reply</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.menuItem, { backgroundColor: theme.bgCard }]}
+                onPress={() => {
+                  if (selectedMsg) handleStarAction(selectedMsg);
+                  setActionMenuVisible(false);
+                }}
+              >
+                <Ionicons name="star" size={16} color="#FEE75C" style={{ marginRight: 12 }} />
+                <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Star Message</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.menuItem, { backgroundColor: theme.bgCard }]}
+                onPress={() => {
+                  if (selectedMsg) pinMessage({ id: selectedMsg.id, text: selectedMsg.text, senderName: selectedMsg.senderName });
+                  setActionMenuVisible(false);
+                }}
+              >
+                <MaterialCommunityIcons name="pin-outline" size={16} color="#FEE75C" style={{ marginRight: 12 }} />
+                <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Pin to Top</Text>
+              </TouchableOpacity>
+
+              {selectedMsg?.senderUid === uid && !selectedMsg?.isDeleted && (
+                <TouchableOpacity
+                  style={[styles.menuItem, { backgroundColor: theme.bgCard }]}
+                  onPress={() => {
+                    if (selectedMsg) {
+                      setEditingMsg(selectedMsg);
+                      setInputText(selectedMsg.text);
+                    }
+                    setActionMenuVisible(false);
+                  }}
+                >
+                  <Feather name="edit-3" size={16} color={theme.textMuted} style={{ marginRight: 12 }} />
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Edit Message</Text>
+                </TouchableOpacity>
+              )}
+
+              {selectedMsg?.senderUid === uid && !selectedMsg?.isDeleted && (
+                <TouchableOpacity
+                  style={[styles.menuItem, styles.menuItemDanger, { backgroundColor: theme.bgCard }]}
+                  onPress={() => {
+                    if (selectedMsg) deleteMessage(selectedMsg.id);
+                    setActionMenuVisible(false);
+                  }}
+                >
+                  <Feather name="trash-2" size={16} color="#EF4444" style={{ marginRight: 12 }} />
+                  <Text style={[styles.menuItemText, { color: '#EF4444' }]}>Delete for Everyone</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── Sub-Modals ─────────────────────────────────────────────────────── */}
+      <VoiceCallModal
+        visible={voiceModalVisible || isInCall}
+        minimized={voiceModalMinimized}
+        channelName={roomTitle}
+        participants={voiceParticipants}
+        isMuted={isVoiceMuted}
+        isVideoOn={isVideoOn}
+        isDeafened={isDeafened}
+        localStream={localStream}
+        onToggleMute={toggleVoiceMute}
+        onToggleVideo={toggleVideo}
+        onToggleDeafen={toggleDeafen}
+        onLeaveCall={() => {
+          leaveCall();
+          setVoiceModalVisible(false);
+          setVoiceModalMinimized(false);
+        }}
+        onToggleMinimize={() => setVoiceModalMinimized(!voiceModalMinimized)}
+      />
+
+      <CreatePollModal
+        visible={pollModalVisible}
+        onClose={() => setPollModalVisible(false)}
+        onCreatePoll={handleSendPoll}
+      />
+
+      <GifPickerModal
+        visible={gifModalVisible}
+        onClose={() => setGifModalVisible(false)}
+        onSelectGif={handleSendGif}
+      />
+
+      <StarredMessagesModal
+        visible={starredModalVisible}
+        passkey={passkey}
+        onClose={() => setStarredModalVisible(false)}
+      />
+
+      <ThemeCustomizerModal
+        visible={themeModalVisible}
+        onClose={() => setThemeModalVisible(false)}
+      />
+
+      {activeViewOnceMsg && (
+        <EphemeralViewOnce
+          visible={!!activeViewOnceMsg}
+          text={activeViewOnceMsg.text}
+          senderName={activeViewOnceMsg.senderName}
+          onFinish={() => {
+            deleteMessage(activeViewOnceMsg.id);
+            setActiveViewOnceMsg(null);
+          }}
+        />
+      )}
+
+      {viewingImage && (
+        <ImageViewerModal
+          visible={!!viewingImage}
+          imageUrl={viewingImage.url}
+          senderName={viewingImage.sender}
+          onClose={() => setViewingImage(null)}
+        />
+      )}
+    </SafeAreaView>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  vanishBorderGlow: {
+    borderWidth: 1,
+    borderColor: '#9333EA',
+  },
+
+  // Top Header
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  backBtn: { width: 28, alignItems: 'flex-start' },
+  headerCenter: { flex: 1, alignItems: 'center', paddingHorizontal: 4 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
+  channelName: { fontSize: 15, fontWeight: '700' },
+  adminBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#26241D',
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(254, 231, 92, 0.2)',
+  },
+  adminBadgeText: { color: '#FEE75C', fontSize: 8.5, fontWeight: '800' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  headerActionBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  panicBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+
+  // Pinned Banner
+  pinnedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    gap: 10,
+  },
+  pinnedContent: { flex: 1 },
+  pinnedTitle: { fontSize: 11, fontWeight: '700' },
+  pinnedSnippet: { fontSize: 12, marginTop: 1 },
+  unpinBtn: { padding: 4 },
+
+  // Vanish Banner
+  vanishStatusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#1E122C',
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderColor: '#9333EA',
+  },
+  vanishStatusText: {
+    color: '#C084FC',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  // Messages List
+  messageList: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 12, gap: 4 },
+  messageRowWrap: { flexDirection: 'row', marginVertical: 3, maxWidth: '88%', position: 'relative' },
+  rowWrapMe: { alignSelf: 'flex-end' },
+  rowWrapThem: { alignSelf: 'flex-start' },
+  bubbleCol: { flexShrink: 1, position: 'relative' },
+  bubbleColMe: { alignItems: 'flex-end' },
+  bubbleColThem: { alignItems: 'flex-start' },
+
+  bubbleContainerWithToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+  },
+
+  hoverToolbar: {
+    position: 'absolute',
+    top: -30,
+    flexDirection: 'row',
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    borderWidth: 1,
+    zIndex: 100,
+    gap: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  hoverToolbarMe: { right: 0 },
+  hoverToolbarThem: { left: 0 },
+  toolBtn: { padding: 4, borderRadius: 4 },
+
+  floatingEmojiBar: {
+    position: 'absolute',
+    top: -40,
+    flexDirection: 'row',
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    zIndex: 110,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  floatingEmojiMe: { right: 0 },
+  floatingEmojiThem: { left: 0 },
+  quickEmojiBtn: { padding: 2 },
+  quickEmojiText: { fontSize: 18 },
+
+  moreOptionsTrigger: { paddingHorizontal: 4, paddingVertical: 2, opacity: 0.6 },
+
+  avatar: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginRight: 8, alignSelf: 'flex-end', marginBottom: 2, overflow: 'hidden' },
+  avatarImg: { width: '100%', height: '100%' },
+  avatarPlaceholder: { width: 32, marginRight: 8 },
+  avatarText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
+  theirSenderName: { fontSize: 11, fontWeight: '700', marginBottom: 3, marginLeft: 4 },
+
+  bubbleBase: { borderRadius: 18, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6 },
+  myBubble: { borderBottomRightRadius: 4 },
+  theirBubble: { borderBottomLeftRadius: 4, borderWidth: 1 },
+  messageText: { fontSize: 14.5, lineHeight: 20 },
+  myText: { color: '#FFFFFF' },
+  deletedText: { fontStyle: 'italic', opacity: 0.6 },
+
+  vanishBubbleGlow: {
+    borderWidth: 1,
+    borderColor: '#A855F7',
+    shadowColor: '#A855F7',
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+  },
+
+  // Photo Bubble
+  imageBubble: {
+    width: 220,
+    height: 220,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    position: 'relative',
+  },
+  bubblePhoto: {
+    width: '100%',
+    height: '100%',
+  },
+  bubbleFooterOverlay: {
+    position: 'absolute',
+    bottom: 6,
+    right: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  photoTimeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  // Voice Note Bubble
+  voiceBubbleLayout: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+    minWidth: 210,
+  },
+  voiceTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  voicePlayBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voicePlayBtnMe: {
+    backgroundColor: '#FFFFFF',
+  },
+  voicePlayBtnThem: {},
+  waveformRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2.5,
+    flex: 1,
+  },
+  waveBar: {
+    width: 3,
+    borderRadius: 1.5,
+  },
+  waveBarMe: {
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+  },
+  waveBarThem: {},
+  voiceDuration: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+  voiceDurMe: {
+    color: '#FFFFFF',
+  },
+
+  // View Once Bubble
+  viewOnceBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    minWidth: 200,
+  },
+  viewOnceTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  viewOnceSub: {
+    fontSize: 10,
+    marginTop: 1,
+  },
+
+  // GIF Bubble
+  gifBubble: {
+    width: 200,
+    height: 140,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+  },
+  gifBubbleImage: {
+    width: '100%',
+    height: '100%',
+  },
+
+  // Quoted Reply Box
+  quoteBox: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, marginBottom: 6, borderLeftWidth: 3 },
+  quoteBoxMe: { backgroundColor: 'rgba(0, 0, 0, 0.25)', borderLeftColor: '#FFFFFF' },
+  quoteBoxThem: { backgroundColor: '#101115' },
+  quoteAuthor: { fontSize: 11, fontWeight: '700', marginBottom: 1 },
+  quoteAuthorMe: { color: '#FFFFFF' },
+  quoteText: { color: '#B5BAC1', fontSize: 12 },
+
+  // Footer
+  bubbleFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 2 },
+  vanishBadge: { fontSize: 8.5, color: '#C084FC', fontWeight: '800', fontStyle: 'italic' },
+  editedBadge: { fontSize: 9, color: '#949BA4', fontStyle: 'italic' },
+  editedBadgeMe: { color: 'rgba(255, 255, 255, 0.6)' },
+  timeText: { fontSize: 10, fontWeight: '500' },
+  myTime: { color: 'rgba(255, 255, 255, 0.65)' },
+  theirTime: { color: '#949BA4' },
+  checkIconWrap: { marginLeft: 2 },
+
+  // Reactions
+  reactionsRow: { flexDirection: 'row', gap: 4, marginTop: 3, zIndex: 5 },
+  reactionsMe: { marginRight: 4 },
+  reactionsThem: { marginLeft: 4 },
+  reactionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 12,
+    gap: 3,
+  },
+  reactionEmoji: { fontSize: 12 },
+  reactionCount: { fontSize: 10, fontWeight: '700' },
+
+  // Empty Welcome
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 28 },
+  emptyHashCircle: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 16, borderWidth: 1 },
+  emptyWelcome: { fontSize: 20, fontWeight: '800', marginBottom: 8, textAlign: 'center' },
+  emptySubtext: { fontSize: 13, textAlign: 'center', lineHeight: 18, marginBottom: 20 },
+  inviteCard: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16, borderWidth: 1 },
+  inviteCardKey: { fontSize: 14, fontWeight: '700', fontFamily: 'monospace' },
+
+  // Reply Banner
+  replyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+  },
+  replyBarAccent: { width: 3, height: '100%', borderRadius: 2, marginRight: 10 },
+  replyMeta: { flex: 1 },
+  replyHeader: { fontSize: 11, fontWeight: '700' },
+  replyPreview: { fontSize: 12 },
+  closeReplyBtn: { padding: 6 },
+
+  viewOnceNoticeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#2A1117',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderTopWidth: 1,
+    borderColor: '#EF4444',
+  },
+  viewOnceNoticeText: {
+    color: '#EF4444',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  // Input Bar
+  inputContainer: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 10, position: 'relative' },
+  inputPill: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1 },
+  attachBtn: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  input: { flex: 1, minHeight: 38, maxHeight: 100, fontSize: 14, paddingVertical: 8 },
+  sendBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginLeft: 6 },
+  sendBtnDisabled: { opacity: 0.3 },
+  micBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginLeft: 6 },
+
+  // Attachment Dock Popup
+  attachmentDock: {
+    position: 'absolute',
+    bottom: 56,
+    left: 12,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 6,
+    zIndex: 100,
+  },
+  dockItem: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  dockIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dockItemLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+
+  // Recording View
+  recordingContainer: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, gap: 10, borderWidth: 1 },
+  recordingPill: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 8 },
+  recordingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444' },
+  recordingTimer: { fontSize: 14, fontWeight: '700' },
+  cancelRecBtn: { paddingHorizontal: 10, paddingVertical: 6 },
+  cancelRecText: { color: '#EF4444', fontSize: 13, fontWeight: '700' },
+  sendVoiceBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+
+  // Action Menu Modal
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  menuModal: { borderRadius: 16, width: '100%', maxWidth: 340, padding: 18, borderWidth: 1 },
+  menuHeaderTitle: { fontSize: 15, fontWeight: '800', marginBottom: 12, textAlign: 'center' },
+  emojiBar: { flexDirection: 'row', justifyContent: 'space-around', borderRadius: 24, paddingVertical: 8, paddingHorizontal: 6, marginBottom: 14, borderWidth: 1 },
+  emojiBtn: { padding: 6 },
+  emojiText: { fontSize: 22 },
+  menuOptionsList: { gap: 6 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 12, borderRadius: 10 },
+  menuItemDanger: { marginTop: 4, borderTopWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  menuItemText: { fontSize: 14, fontWeight: '600' },
+});
