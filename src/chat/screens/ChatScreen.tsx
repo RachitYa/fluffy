@@ -56,6 +56,12 @@ import SharedNoteModal from '../components/SharedNoteModal';
 // Phase 3
 import { useGhostMode, useRoomExpiry, useRoomPasswordLock } from '../hooks/useRoomSecurity';
 import RoomSecurityModal from '../components/RoomSecurityModal';
+// Phase 4
+import { useTodoList } from '../hooks/useTodoList';
+import TodoListModal from '../components/TodoListModal';
+import { useEvents } from '../hooks/useEvents';
+import EventsModal from '../components/EventsModal';
+import { useMusicPresence } from '../hooks/useMusicPresence';
 
 interface Props {
   passkey: string;
@@ -656,6 +662,13 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
   const roomExpiresAt = (room as any)?.expiresAt ?? null;
   const roomHasPassword = Boolean((room as any)?.passwordHash);
 
+  // ── Phase 4: Productivity & Music ─────────────────────────────────────────
+  const { todos, addTodo, toggleTodo, deleteTodo } = useTodoList(passkey, uid, displayName);
+  const { events, createEvent, setRsvp, deleteEvent } = useEvents(passkey, uid, displayName);
+  const { currentTrack, shareNowPlaying, clearNowPlaying } = useMusicPresence(passkey, uid, displayName);
+  const [todosModalVisible, setTodosModalVisible] = useState(false);
+  const [eventsModalVisible, setEventsModalVisible] = useState(false);
+
   const flatListRef = useRef<FlatList>(null);
   const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -722,6 +735,29 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
     if (text.startsWith('/leaderboard')) {
       setInputText('');
       setLeaderboardVisible(true);
+      return;
+    }
+
+    if (text.startsWith('/todo')) {
+      setInputText('');
+      setTodosModalVisible(true);
+      return;
+    }
+
+    if (text.startsWith('/events')) {
+      setInputText('');
+      setEventsModalVisible(true);
+      return;
+    }
+
+    if (text.startsWith('/np')) {
+      const song = text.replace('/np', '').trim();
+      setInputText('');
+      if (song) {
+        shareNowPlaying(song);
+        await sendMessage(`🎵 Listening to **${song}**`, null, 'text', { senderAvatar: photoURL || undefined });
+        awardMessageXp();
+      }
       return;
     }
 
@@ -1047,6 +1083,21 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
           onOpenQueue={() => setStageQueueVisible(true)}
           onOpenHub={() => setStagesHubVisible(true)}
         />
+      )}
+
+      {/* ── Music Presence Now Playing Banner ───────────────────────────────── */}
+      {currentTrack && (
+        <View style={[styles.nowPlayingBanner, { backgroundColor: '#1DB954' + '22', borderColor: '#1DB954' }]}>
+          <Feather name="music" size={13} color="#1DB954" />
+          <Text style={[styles.nowPlayingText, { color: theme.textPrimary }]} numberOfLines={1}>
+            <Text style={{ fontWeight: '800', color: '#1DB954' }}>{currentTrack.sharedBy}</Text> is listening to{' '}
+            <Text style={{ fontWeight: '800' }}>{currentTrack.title}</Text>
+            {currentTrack.artist ? ` · ${currentTrack.artist}` : ''}
+          </Text>
+          <TouchableOpacity onPress={clearNowPlaying} style={{ padding: 2 }}>
+            <Feather name="x" size={12} color={theme.textMuted} />
+          </TouchableOpacity>
+        </View>
       )}
 
       {/* ── Pinned Message Banner ─────────────────────────────────────────── */}
@@ -1376,6 +1427,34 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
                 </View>
                 <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Bookmarks</Text>
               </TouchableOpacity>
+
+              {/* 9. Tasks */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setTodosModalVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#10B981' }]}>
+                  <MaterialCommunityIcons name="checkbox-marked-circle-outline" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Tasks</Text>
+              </TouchableOpacity>
+
+              {/* 10. Events */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setEventsModalVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#F59E0B' }]}>
+                  <MaterialCommunityIcons name="calendar-month-outline" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Events</Text>
+              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -1688,6 +1767,31 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
         onVerifyPassword={verifyPassword}
         onClose={() => setSecurityModalVisible(false)}
       />
+
+      {/* ── Tasks / Todo List Modal ───────────────────────────────────────── */}
+      {todosModalVisible && (
+        <TodoListModal
+          visible={todosModalVisible}
+          todos={todos}
+          onAddTodo={addTodo}
+          onToggleTodo={toggleTodo}
+          onDeleteTodo={deleteTodo}
+          onClose={() => setTodosModalVisible(false)}
+        />
+      )}
+
+      {/* ── Events Planning Modal ─────────────────────────────────────────── */}
+      {eventsModalVisible && (
+        <EventsModal
+          visible={eventsModalVisible}
+          events={events}
+          userUid={uid}
+          onCreateEvent={createEvent}
+          onSetRsvp={setRsvp}
+          onDeleteEvent={deleteEvent}
+          onClose={() => setEventsModalVisible(false)}
+        />
+      )}
     </View>
   );
 }
@@ -1729,6 +1833,17 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   headerActionBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   panicBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+
+  // Now Playing Banner
+  nowPlayingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    gap: 8,
+  },
+  nowPlayingText: { flex: 1, fontSize: 11 },
 
   // Pinned Banner
   pinnedBanner: {
