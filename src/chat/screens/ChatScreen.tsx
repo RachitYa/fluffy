@@ -38,6 +38,10 @@ import SearchMessagesBar from '../components/SearchMessagesBar';
 import ThemeCustomizerModal from '../components/ThemeCustomizerModal';
 import ImageViewerModal from '../components/ImageViewerModal';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useMediaStages, extractVideoTitle, detectMediaType } from '../hooks/useMediaStages';
+import MediaStagesHubModal from '../components/MediaStagesHubModal';
+import StageVideoPlayer from '../components/StageVideoPlayer';
+import StageQueueModal from '../components/StageQueueModal';
 
 interface Props {
   passkey: string;
@@ -546,6 +550,29 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
   const { watchParty, startWatchParty, updatePlayback, seekPlayback, closeWatchParty } =
     useWatchParty(passkey, uid, displayName);
 
+  // ── Cinema Stages ──────────────────────────────────────────────────────────
+  const {
+    stages,
+    activeStage,
+    activeStageId,
+    isHost: isStageHost,
+    canControl: canControlStage,
+    createStage,
+    joinStage,
+    leaveStage,
+    closeStage,
+    updatePlayback: updateStagePlayback,
+    seekTo: seekStage,
+    toggleDjMode,
+    addToQueue,
+    playNextInQueue,
+    removeFromQueue,
+  } = useMediaStages(passkey, uid, displayName, photoURL);
+
+  const [stagesHubVisible, setStagesHubVisible] = useState(false);
+  const [stageMinimized, setStageMinimized] = useState(false);
+  const [stageQueueVisible, setStageQueueVisible] = useState(false);
+
   // Modals & States
   const [voiceModalVisible, setVoiceModalVisible] = useState(false);
   const [voiceModalMinimized, setVoiceModalMinimized] = useState(false);
@@ -768,6 +795,9 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
             onlineCount={1}
             voiceCount={voiceParticipants.length}
             typingUsers={typingUsers}
+            stageCount={stages.length}
+            activeStageTitle={activeStage?.title ?? null}
+            onStagePillPress={() => setStagesHubVisible(true)}
           />
         </View>
 
@@ -818,6 +848,24 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
             <Feather name="mic" size={14} color={isInCall ? '#FFFFFF' : '#D1D5DB'} />
           </TouchableOpacity>
 
+          {/* Cinema Stages button */}
+          <TouchableOpacity
+            style={[
+              styles.headerActionBtn,
+              { backgroundColor: stages.length > 0 ? '#1A0E1F' : theme.bgCard },
+              stages.length > 0 && { borderWidth: 1, borderColor: '#FF6B6B' },
+            ]}
+            onPress={() => setStagesHubVisible(true)}
+            activeOpacity={0.75}
+            accessibilityLabel="Cinema Stages"
+          >
+            <MaterialCommunityIcons
+              name="theater"
+              size={14}
+              color={stages.length > 0 ? '#FF6B6B' : '#D1D5DB'}
+            />
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.headerActionBtn, { backgroundColor: theme.bgCard }]}
             onPress={() => setThemeModalVisible(true)}
@@ -858,6 +906,42 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
           onUpdatePlayback={updatePlayback}
           onSeek={seekPlayback}
           onClose={closeWatchParty}
+        />
+      )}
+
+      {/* ── Persistent Cinema Stage Player ────────────────────────────────── */}
+      {activeStage && !stageMinimized && (
+        <StageVideoPlayer
+          stage={activeStage}
+          minimized={false}
+          isHost={isStageHost}
+          canControl={canControlStage}
+          currentUserUid={uid}
+          onUpdatePlayback={updateStagePlayback}
+          onSeek={seekStage}
+          onLeave={leaveStage}
+          onClose={closeStage}
+          onToggleDjMode={toggleDjMode}
+          onToggleMinimize={() => setStageMinimized(true)}
+          onOpenQueue={() => setStageQueueVisible(true)}
+          onOpenHub={() => setStagesHubVisible(true)}
+        />
+      )}
+      {activeStage && stageMinimized && (
+        <StageVideoPlayer
+          stage={activeStage}
+          minimized={true}
+          isHost={isStageHost}
+          canControl={canControlStage}
+          currentUserUid={uid}
+          onUpdatePlayback={updateStagePlayback}
+          onSeek={seekStage}
+          onLeave={leaveStage}
+          onClose={closeStage}
+          onToggleDjMode={toggleDjMode}
+          onToggleMinimize={() => setStageMinimized(false)}
+          onOpenQueue={() => setStageQueueVisible(true)}
+          onOpenHub={() => setStagesHubVisible(true)}
         />
       )}
 
@@ -1288,6 +1372,35 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
           imageUrl={viewingImage.url}
           senderName={viewingImage.sender}
           onClose={() => setViewingImage(null)}
+        />
+      )}
+
+      {/* ── Cinema Stages Hub Modal ────────────────────────────────────────── */}
+      <MediaStagesHubModal
+        visible={stagesHubVisible}
+        stages={stages}
+        onClose={() => setStagesHubVisible(false)}
+        onTuneIn={(stageId) => {
+          joinStage(stageId);
+          setStageMinimized(false);
+        }}
+        onCreateStage={createStage}
+        onCloseStage={closeStage}
+        currentUserUid={uid}
+      />
+
+      {/* ── Stage Queue Modal ──────────────────────────────────────────────── */}
+      {activeStage && stageQueueVisible && (
+        <StageQueueModal
+          visible={stageQueueVisible}
+          stage={activeStage}
+          canControl={canControlStage}
+          currentUserUid={uid}
+          currentUserName={displayName}
+          onClose={() => setStageQueueVisible(false)}
+          onAddToQueue={addToQueue}
+          onPlayNext={playNextInQueue}
+          onRemoveFromQueue={removeFromQueue}
         />
       )}
     </View>
