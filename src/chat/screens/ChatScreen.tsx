@@ -42,6 +42,11 @@ import { useMediaStages, extractVideoTitle, detectMediaType } from '../hooks/use
 import MediaStagesHubModal from '../components/MediaStagesHubModal';
 import StageVideoPlayer from '../components/StageVideoPlayer';
 import StageQueueModal from '../components/StageQueueModal';
+import { useGameSession } from '../hooks/useGameSession';
+import { useXpSystem, XP_AMOUNTS } from '../hooks/useXpSystem';
+import GameChallengeModal from '../components/GameChallengeModal';
+import LeaderboardModal from '../components/LeaderboardModal';
+import XpBadge from '../components/XpBadge';
 
 interface Props {
   passkey: string;
@@ -600,6 +605,31 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
 
+  // ── Games ──────────────────────────────────────────────────────────────────
+  const {
+    games,
+    myActiveGame,
+    pendingChallenge,
+    challengeTicTacToe,
+    challengeWordGuess,
+    acceptGame,
+    makeTicTacToeMove,
+    guessLetter,
+    dismissGame,
+  } = useGameSession(passkey, uid, displayName);
+
+  const [gameModalVisible, setGameModalVisible] = useState(false);
+  const [leaderboardVisible, setLeaderboardVisible] = useState(false);
+  const [flipResult, setFlipResult] = useState<string | null>(null);
+
+  // ── XP System ─────────────────────────────────────────────────────────────
+  const {
+    leaderboard,
+    myXp,
+    awardMessageXp,
+    awardReactionXp,
+  } = useXpSystem(passkey, uid, displayName);
+
   const flatListRef = useRef<FlatList>(null);
   const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -638,6 +668,37 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
       return;
     }
 
+    // ── Slash Commands ────────────────────────────────────────────────────
+    if (text.startsWith('/flip')) {
+      const result = Math.random() < 0.5 ? 'Heads 🪙' : 'Tails 🪙';
+      setInputText('');
+      setSending(true);
+      try {
+        await sendMessage(`🪙 Coin Flip → **${result}**`, null, 'text', { senderAvatar: photoURL || undefined });
+        awardMessageXp();
+      } finally { setSending(false); }
+      return;
+    }
+
+    if (text.startsWith('/roll')) {
+      const parts = text.split(' ');
+      const max = parseInt(parts[1] ?? '100', 10) || 100;
+      const roll = Math.floor(Math.random() * max) + 1;
+      setInputText('');
+      setSending(true);
+      try {
+        await sendMessage(`🎲 Dice Roll (1-${max}) → **${roll}**`, null, 'text', { senderAvatar: photoURL || undefined });
+        awardMessageXp();
+      } finally { setSending(false); }
+      return;
+    }
+
+    if (text.startsWith('/leaderboard')) {
+      setInputText('');
+      setLeaderboardVisible(true);
+      return;
+    }
+
     const ytId = extractYouTubeId(text);
 
     setInputText('');
@@ -651,6 +712,9 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
         senderAvatar: photoURL || undefined,
       });
 
+      // Award XP for sending a message
+      awardMessageXp();
+
       if (ytId && !watchParty) {
         startWatchParty(ytId, 'Shared YouTube Video');
       }
@@ -662,7 +726,7 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
     } finally {
       setSending(false);
     }
-  }, [inputText, sending, editingMsg, replyingTo, vanishMode, viewOnceActive, watchParty, photoURL, startWatchParty, editMessage, sendMessage, setTyping]);
+  }, [inputText, sending, editingMsg, replyingTo, vanishMode, viewOnceActive, watchParty, photoURL, startWatchParty, editMessage, sendMessage, setTyping, awardMessageXp]);
 
   // ── Photo Upload Handler ───────────────────────────────────────────────────
   const handlePhotoUpload = (e: any) => {
@@ -1216,6 +1280,34 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
                 </View>
                 <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>View Once</Text>
               </TouchableOpacity>
+
+              {/* 5. Mini Games */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setGameModalVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#8B5CF6' }]}>
+                  <MaterialCommunityIcons name="gamepad-variant" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Games</Text>
+              </TouchableOpacity>
+
+              {/* 6. Leaderboard */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setLeaderboardVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#F59E0B' }]}>
+                  <MaterialCommunityIcons name="trophy" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Leaderboard</Text>
+              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -1403,6 +1495,43 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
           onRemoveFromQueue={removeFromQueue}
         />
       )}
+
+      {/* ── Pending Game Challenge Notification ───────────────────────────── */}
+      {pendingChallenge && !gameModalVisible && (
+        <TouchableOpacity
+          style={styles.pendingChallengeBanner}
+          onPress={() => setGameModalVisible(true)}
+          activeOpacity={0.9}
+        >
+          <MaterialCommunityIcons name="gamepad-variant" size={16} color="#fff" />
+          <Text style={styles.pendingChallengeText}>
+            ⚔️ {pendingChallenge.challengerName} challenged you to{' '}
+            {pendingChallenge.type === 'tictactoe' ? 'Tic-Tac-Toe' : 'Word Guess'}! Tap to play
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {/* ── Game Challenge Modal ──────────────────────────────────────────── */}
+      <GameChallengeModal
+        visible={gameModalVisible}
+        game={myActiveGame ?? pendingChallenge}
+        userUid={uid}
+        onClose={() => setGameModalVisible(false)}
+        onAccept={acceptGame}
+        onTicTacToeMove={makeTicTacToeMove}
+        onWordGuess={guessLetter}
+        onDismiss={dismissGame}
+      />
+
+      {/* ── Leaderboard Modal ─────────────────────────────────────────────── */}
+      {leaderboardVisible && (
+        <LeaderboardModal
+          visible={leaderboardVisible}
+          leaderboard={leaderboard}
+          myXp={myXp}
+          onClose={() => setLeaderboardVisible(false)}
+        />
+      )}
     </View>
   );
 }
@@ -1469,6 +1598,30 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderBottomWidth: 1,
     borderColor: '#9333EA',
+  },
+  pendingChallengeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#5865F2',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    position: 'absolute',
+    bottom: 80,
+    left: 12,
+    right: 12,
+    borderRadius: 12,
+    zIndex: 100,
+    shadowColor: '#000',
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  pendingChallengeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+    flex: 1,
   },
   vanishStatusText: {
     color: '#C084FC',
