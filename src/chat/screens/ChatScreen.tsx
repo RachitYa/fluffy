@@ -53,6 +53,9 @@ import { useBookmarks } from '../hooks/useBookmarks';
 import ThreadDrawer from '../components/ThreadDrawer';
 import BookmarksModal from '../components/BookmarksModal';
 import SharedNoteModal from '../components/SharedNoteModal';
+// Phase 3
+import { useGhostMode, useRoomExpiry, useRoomPasswordLock } from '../hooks/useRoomSecurity';
+import RoomSecurityModal from '../components/RoomSecurityModal';
 
 interface Props {
   passkey: string;
@@ -645,6 +648,14 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
   const [bookmarksVisible, setBookmarksVisible] = useState(false);
   const [sharedNoteVisible, setSharedNoteVisible] = useState(false);
 
+  // ── Phase 3: Security ─────────────────────────────────────────────────────
+  const { isGhost, toggleGhostMode } = useGhostMode();
+  const { setExpiry } = useRoomExpiry(passkey);
+  const { setRoomPassword, removeRoomPassword, verifyPassword } = useRoomPasswordLock(passkey);
+  const [securityModalVisible, setSecurityModalVisible] = useState(false);
+  const roomExpiresAt = (room as any)?.expiresAt ?? null;
+  const roomHasPassword = Boolean((room as any)?.passwordHash);
+
   const flatListRef = useRef<FlatList>(null);
   const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -652,11 +663,11 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
   const roomTitle = room?.displayName || passkey;
 
   useEffect(() => {
-    if (messages.length > 0) {
+    if (!isGhost && messages.length > 0) {
       const lastMsg = messages[messages.length - 1];
       markAsRead(lastMsg.id);
     }
-  }, [messages, markAsRead]);
+  }, [messages, markAsRead, isGhost]);
 
   // Clean up vanish messages on exit
   useEffect(() => {
@@ -943,6 +954,20 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
               size={14}
               color={stages.length > 0 ? '#FF6B6B' : '#D1D5DB'}
             />
+          </TouchableOpacity>
+
+          {/* Security button */}
+          <TouchableOpacity
+            style={[
+              styles.headerActionBtn,
+              { backgroundColor: isGhost ? '#1A1A2E' : theme.bgCard },
+              isGhost && { borderWidth: 1, borderColor: '#949BA4' },
+            ]}
+            onPress={() => setSecurityModalVisible(true)}
+            activeOpacity={0.75}
+            accessibilityLabel="Privacy & Security"
+          >
+            <Feather name="shield" size={14} color={isGhost ? '#949BA4' : '#D1D5DB'} />
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1648,6 +1673,21 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
           onSave={updateNote}
         />
       )}
+
+      {/* ── Room Security Modal ─────────────────────────────────────────────── */}
+      <RoomSecurityModal
+        visible={securityModalVisible}
+        isAdmin={isAdmin}
+        isGhost={isGhost}
+        onToggleGhost={toggleGhostMode}
+        expiresAt={roomExpiresAt}
+        onSetExpiry={setExpiry}
+        hasPassword={roomHasPassword}
+        onSetPassword={setRoomPassword}
+        onRemovePassword={removeRoomPassword}
+        onVerifyPassword={verifyPassword}
+        onClose={() => setSecurityModalVisible(false)}
+      />
     </View>
   );
 }
