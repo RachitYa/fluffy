@@ -47,6 +47,12 @@ import { useXpSystem, XP_AMOUNTS } from '../hooks/useXpSystem';
 import GameChallengeModal from '../components/GameChallengeModal';
 import LeaderboardModal from '../components/LeaderboardModal';
 import XpBadge from '../components/XpBadge';
+// Phase 2
+import { useSharedNote } from '../hooks/useSharedNote';
+import { useBookmarks } from '../hooks/useBookmarks';
+import ThreadDrawer from '../components/ThreadDrawer';
+import BookmarksModal from '../components/BookmarksModal';
+import SharedNoteModal from '../components/SharedNoteModal';
 
 interface Props {
   passkey: string;
@@ -629,6 +635,15 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
     awardMessageXp,
     awardReactionXp,
   } = useXpSystem(passkey, uid, displayName);
+
+  // ── Phase 2: Threads, Notes, Bookmarks ───────────────────────────────────
+  const { note, updateNote } = useSharedNote(passkey, uid, displayName);
+  const { bookmarks, addBookmark, removeBookmark, isBookmarked } = useBookmarks(uid);
+
+  const [threadVisible, setThreadVisible] = useState(false);
+  const [threadParentMsg, setThreadParentMsg] = useState<{ id: string; text: string; senderName: string } | null>(null);
+  const [bookmarksVisible, setBookmarksVisible] = useState(false);
+  const [sharedNoteVisible, setSharedNoteVisible] = useState(false);
 
   const flatListRef = useRef<FlatList>(null);
   const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1308,6 +1323,34 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
                 </View>
                 <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Leaderboard</Text>
               </TouchableOpacity>
+
+              {/* 7. Shared Note */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setSharedNoteVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#FEE75C' }]}>
+                  <MaterialCommunityIcons name="note-text-outline" size={18} color="#000" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Shared Note</Text>
+              </TouchableOpacity>
+
+              {/* 8. Bookmarks */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setBookmarksVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#06B6D4' }]}>
+                  <Feather name="bookmark" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Bookmarks</Text>
+              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -1368,6 +1411,46 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
                 <MaterialCommunityIcons name="pin-outline" size={16} color="#FEE75C" style={{ marginRight: 12 }} />
                 <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Pin to Top</Text>
               </TouchableOpacity>
+
+              {/* Thread Reply */}
+              {selectedMsg && !selectedMsg.isDeleted && (
+                <TouchableOpacity
+                  style={[styles.menuItem, { backgroundColor: theme.bgCard }]}
+                  onPress={() => {
+                    if (selectedMsg) {
+                      setThreadParentMsg({ id: selectedMsg.id, text: selectedMsg.text, senderName: selectedMsg.senderName });
+                      setThreadVisible(true);
+                    }
+                    setActionMenuVisible(false);
+                  }}
+                >
+                  <Feather name="message-square" size={16} color={theme.accent} style={{ marginRight: 12 }} />
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Open Thread</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Bookmark */}
+              {selectedMsg && !selectedMsg.isDeleted && (
+                <TouchableOpacity
+                  style={[styles.menuItem, { backgroundColor: theme.bgCard }]}
+                  onPress={() => {
+                    if (selectedMsg) {
+                      addBookmark(selectedMsg.id, selectedMsg.text, selectedMsg.senderName, passkey, roomTitle);
+                    }
+                    setActionMenuVisible(false);
+                  }}
+                >
+                  <Feather
+                    name={selectedMsg && isBookmarked(selectedMsg.id) ? 'bookmark' : 'bookmark'}
+                    size={16}
+                    color="#FEE75C"
+                    style={{ marginRight: 12 }}
+                  />
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>
+                    {selectedMsg && isBookmarked(selectedMsg.id) ? 'Bookmarked ✓' : 'Bookmark'}
+                  </Text>
+                </TouchableOpacity>
+              )}
 
               {selectedMsg?.senderUid === uid && !selectedMsg?.isDeleted && (
                 <TouchableOpacity
@@ -1530,6 +1613,39 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
           leaderboard={leaderboard}
           myXp={myXp}
           onClose={() => setLeaderboardVisible(false)}
+        />
+      )}
+
+      {/* ── Thread Drawer ─────────────────────────────────────────────────── */}
+      <ThreadDrawer
+        visible={threadVisible}
+        passkey={passkey}
+        parentMessageId={threadParentMsg?.id ?? null}
+        parentMessageText={threadParentMsg?.text ?? ''}
+        parentSenderName={threadParentMsg?.senderName ?? ''}
+        userUid={uid}
+        userName={displayName}
+        userAvatar={photoURL}
+        onClose={() => setThreadVisible(false)}
+      />
+
+      {/* ── Bookmarks Modal ───────────────────────────────────────────────── */}
+      {bookmarksVisible && (
+        <BookmarksModal
+          visible={bookmarksVisible}
+          bookmarks={bookmarks}
+          onClose={() => setBookmarksVisible(false)}
+          onRemove={removeBookmark}
+        />
+      )}
+
+      {/* ── Shared Note Modal ─────────────────────────────────────────────── */}
+      {sharedNoteVisible && (
+        <SharedNoteModal
+          visible={sharedNoteVisible}
+          note={note}
+          onClose={() => setSharedNoteVisible(false)}
+          onSave={updateNote}
         />
       )}
     </View>
