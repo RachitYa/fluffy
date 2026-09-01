@@ -16,7 +16,7 @@ import {
   Pressable,
   Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { format } from 'date-fns';
 import { useAuth } from '../hooks/useAuth';
 import { useRoom } from '../hooks/useRoom';
@@ -60,11 +60,13 @@ function VoiceNoteBubble({
   isMe,
   timeStr,
   isReadByOthers,
+  onLongPress,
 }: {
   duration: number;
   isMe: boolean;
   timeStr: string;
   isReadByOthers: boolean;
+  onLongPress?: () => void;
 }) {
   const { theme } = useTheme();
   const [playing, setPlaying] = useState(false);
@@ -92,7 +94,9 @@ function VoiceNoteBubble({
   const togglePlay = () => setPlaying(!playing);
 
   return (
-    <View
+    <Pressable
+      onLongPress={onLongPress}
+      delayLongPress={280}
       style={[
         styles.bubbleBase,
         isMe
@@ -148,7 +152,7 @@ function VoiceNoteBubble({
           </View>
         )}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -169,6 +173,7 @@ function MessageBubbleItem({
   onVotePoll,
   onOpenViewOnce,
   onOpenImage,
+  currentUserDisplayName,
 }: {
   msg: Message;
   isMe: boolean;
@@ -185,6 +190,7 @@ function MessageBubbleItem({
   onVotePoll: (msgId: string, optId: string) => void;
   onOpenViewOnce: (msg: Message) => void;
   onOpenImage: (imageUrl: string, senderName: string) => void;
+  currentUserDisplayName: string | null;
 }) {
   const { theme } = useTheme();
   const [isHovered, setIsHovered] = useState(false);
@@ -245,7 +251,7 @@ function MessageBubbleItem({
         )}
 
         <View style={styles.bubbleContainerWithToolbar}>
-          {/* ── Hover Action Toolbar ────────────────────────────────────────── */}
+          {/* ── Hover Action Toolbar (Desktop) ──────────────────────────────── */}
           {(isHovered || showEmojiPicker) && !isDeleted && (
             <View
               style={[
@@ -346,6 +352,8 @@ function MessageBubbleItem({
             <TouchableOpacity
               style={[styles.viewOnceBubble, { borderColor: theme.accent, backgroundColor: theme.bgCard }]}
               onPress={() => onOpenViewOnce(msg)}
+              onLongPress={() => onOpenActions(msg)}
+              delayLongPress={280}
               activeOpacity={0.8}
             >
               <Ionicons name="eye-outline" size={16} color={theme.accent} />
@@ -368,6 +376,8 @@ function MessageBubbleItem({
             <TouchableOpacity
               style={[styles.imageBubble, { borderColor: theme.borderSubtle, backgroundColor: theme.bgCard }]}
               onPress={() => onOpenImage(msg.imageUrl!, msg.senderName)}
+              onLongPress={() => onOpenActions(msg)}
+              delayLongPress={280}
               activeOpacity={0.85}
             >
               <Image source={{ uri: msg.imageUrl }} style={styles.bubblePhoto} resizeMode="cover" />
@@ -382,12 +392,16 @@ function MessageBubbleItem({
             </TouchableOpacity>
           ) : msg.gifUrl ? (
             /* Animated GIF Bubble */
-            <View style={[styles.gifBubble, { borderColor: theme.borderSubtle }]}>
+            <Pressable
+              onLongPress={() => onOpenActions(msg)}
+              delayLongPress={280}
+              style={[styles.gifBubble, { borderColor: theme.borderSubtle }]}
+            >
               <Image source={{ uri: msg.gifUrl }} style={styles.gifBubbleImage} resizeMode="cover" />
               <View style={styles.bubbleFooter}>
                 <Text style={[styles.timeText, styles.theirTime]}>{timeStr}</Text>
               </View>
-            </View>
+            </Pressable>
           ) : msg.type === 'voice' ? (
             /* Interactive Voice Note Waveform Bubble */
             <VoiceNoteBubble
@@ -395,12 +409,14 @@ function MessageBubbleItem({
               isMe={isMe}
               timeStr={timeStr}
               isReadByOthers={isReadByOthers}
+              onLongPress={() => onOpenActions(msg)}
             />
           ) : (
             /* Normal Text Message Bubble */
             <Pressable
               onPress={handleTap}
               onLongPress={() => onOpenActions(msg)}
+              delayLongPress={280}
               style={[
                 styles.bubbleBase,
                 isMe ? [styles.myBubble, { backgroundColor: theme.accent }] : [styles.theirBubble, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }],
@@ -454,32 +470,36 @@ function MessageBubbleItem({
               </View>
             </Pressable>
           )}
-
-          {!isDeleted && !msg.poll && (
-            <TouchableOpacity
-              onPress={() => onOpenActions(msg)}
-              style={styles.moreOptionsTrigger}
-              activeOpacity={0.6}
-            >
-              <Feather name="more-horizontal" size={14} color="#6B7280" />
-            </TouchableOpacity>
-          )}
         </View>
 
-        {/* Reaction Badges */}
+        {/* Discord-style Pill Reactions */}
         {msg.reactions && Object.keys(msg.reactions).length > 0 && (
           <View style={[styles.reactionsRow, isMe ? styles.reactionsMe : styles.reactionsThem]}>
-            {Object.entries(msg.reactions).map(([emoji, users]) => (
-              <TouchableOpacity
-                key={emoji}
-                style={[styles.reactionBadge, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }]}
-                onPress={() => onReactionPress(msg, emoji)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.reactionEmoji}>{emoji}</Text>
-                {users.length > 1 && <Text style={[styles.reactionCount, { color: theme.textPrimary }]}>{users.length}</Text>}
-              </TouchableOpacity>
-            ))}
+            {Object.entries(msg.reactions).map(([emoji, users]) => {
+              const count = Array.isArray(users) ? users.length : (typeof users === 'number' ? users : 1);
+              if (count <= 0) return null;
+              const hasReacted = Array.isArray(users) && currentUserDisplayName ? users.includes(currentUserDisplayName) : false;
+
+              return (
+                <TouchableOpacity
+                  key={emoji}
+                  style={[
+                    styles.reactionBadge,
+                    {
+                      backgroundColor: hasReacted ? 'rgba(88, 101, 242, 0.22)' : theme.bgCard,
+                      borderColor: hasReacted ? theme.accent : theme.borderSubtle,
+                    },
+                  ]}
+                  onPress={() => onReactionPress(msg, emoji)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.reactionEmoji}>{emoji}</Text>
+                  <Text style={[styles.reactionCount, { color: hasReacted ? theme.accent : theme.textPrimary }]}>
+                    {count}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         )}
       </View>
@@ -490,6 +510,7 @@ function MessageBubbleItem({
 // ─── Main ChatScreen Component ────────────────────────────────────────────────
 export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const { uid, displayName, photoURL } = useAuth();
   const { room, loading: roomLoading, pinMessage } = useRoom(passkey);
   const {
@@ -710,13 +731,15 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
   }
 
   return (
-    <SafeAreaView
+    <View
       style={[
         styles.container,
-        { backgroundColor: vanishMode ? '#100A17' : theme.bgDark },
+        {
+          backgroundColor: vanishMode ? '#100A17' : theme.bgDark,
+          paddingTop: insets.top,
+        },
         vanishMode && styles.vanishBorderGlow,
       ]}
-      edges={['top']}
     >
       <StatusBar barStyle="light-content" />
 
@@ -883,7 +906,7 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
             </View>
             <Text style={[styles.emptyWelcome, { color: theme.textPrimary }]}>Welcome to #{roomTitle}!</Text>
             <Text style={[styles.emptySubtext, { color: theme.textMuted }]}>
-              This is the start of the #{roomTitle} channel. Hover or tap any message to react, reply, star, or pin!
+              This is the start of the #{roomTitle} channel. Long-press any message to react, reply, star, or pin!
             </Text>
             <TouchableOpacity onPress={copyPasskey} style={[styles.inviteCard, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]} activeOpacity={0.8}>
               <Feather name="key" size={13} color={theme.accent} />
@@ -897,6 +920,10 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.messageList}
             renderItem={({ item, index }) => {
+              const isMyMessage = Boolean(
+                (uid && item.senderUid === uid) ||
+                (displayName && item.senderName && item.senderName.trim().toLowerCase() === displayName.trim().toLowerCase())
+              );
               const prevMsg = index > 0 ? displayedMessages[index - 1] : null;
               const isSameSender = prevMsg && prevMsg.senderUid === item.senderUid;
               const showSenderHeader = !isSameSender;
@@ -904,7 +931,7 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
               return (
                 <MessageBubbleItem
                   msg={item}
-                  isMe={item.senderUid === uid}
+                  isMe={isMyMessage}
                   showSenderHeader={showSenderHeader}
                   onDoubleTap={handleDoubleTap}
                   onOpenActions={(m) => {
@@ -927,6 +954,7 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
                     if (uid) openViewOnce(m.id, uid);
                   }}
                   onOpenImage={(url, sender) => setViewingImage({ url, sender })}
+                  currentUserDisplayName={displayName}
                 />
               );
             }}
@@ -983,7 +1011,7 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
         )}
 
         {/* ── Input Bar ─────────────────────────────────────────────────────── */}
-        <SafeAreaView edges={['bottom']} style={[styles.inputContainer, { backgroundColor: theme.bgDark }]}>
+        <View style={[styles.inputContainer, { backgroundColor: theme.bgDark, paddingBottom: Math.max(insets.bottom, 10) }]}>
           {isRecordingVoice ? (
             <View style={[styles.recordingContainer, { backgroundColor: theme.bgSurface, borderColor: theme.borderSubtle }]}>
               <View style={styles.recordingPill}>
@@ -1106,7 +1134,7 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
               </TouchableOpacity>
             </View>
           )}
-        </SafeAreaView>
+        </View>
       </KeyboardAvoidingView>
 
       {/* ── Action Menu Modal ──────────────────────────────────────────────── */}
@@ -1262,7 +1290,7 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
           onClose={() => setViewingImage(null)}
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1389,8 +1417,6 @@ const styles = StyleSheet.create({
   quickEmojiBtn: { padding: 2 },
   quickEmojiText: { fontSize: 18 },
 
-  moreOptionsTrigger: { paddingHorizontal: 4, paddingVertical: 2, opacity: 0.6 },
-
   avatar: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginRight: 8, alignSelf: 'flex-end', marginBottom: 2, overflow: 'hidden' },
   avatarImg: { width: '100%', height: '100%' },
   avatarPlaceholder: { width: 32, marginRight: 8 },
@@ -1441,6 +1467,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
+
   // Voice Note Bubble
   voiceBubbleLayout: {
     paddingHorizontal: 12,
@@ -1539,21 +1566,21 @@ const styles = StyleSheet.create({
   theirTime: { color: '#949BA4' },
   checkIconWrap: { marginLeft: 2 },
 
-  // Reactions
-  reactionsRow: { flexDirection: 'row', gap: 4, marginTop: 3, zIndex: 5 },
-  reactionsMe: { marginRight: 4 },
-  reactionsThem: { marginLeft: 4 },
+  // Discord-style Pill Reactions
+  reactionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 4, zIndex: 5 },
+  reactionsMe: { justifyContent: 'flex-end' },
+  reactionsThem: { justifyContent: 'flex-start' },
   reactionBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 12,
-    gap: 3,
+    gap: 4,
   },
-  reactionEmoji: { fontSize: 12 },
-  reactionCount: { fontSize: 10, fontWeight: '700' },
+  reactionEmoji: { fontSize: 13 },
+  reactionCount: { fontSize: 11, fontWeight: '800' },
 
   // Empty Welcome
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 28 },
@@ -1594,7 +1621,7 @@ const styles = StyleSheet.create({
   },
 
   // Input Bar
-  inputContainer: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 10, position: 'relative' },
+  inputContainer: { paddingHorizontal: 12, paddingTop: 6, position: 'relative' },
   inputPill: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1 },
   attachBtn: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
   input: { flex: 1, minHeight: 38, maxHeight: 100, fontSize: 14, paddingVertical: 8 },

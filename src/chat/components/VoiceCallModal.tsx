@@ -8,6 +8,7 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VoiceParticipant } from '../hooks/useVoiceCall';
 import { Feather, Ionicons } from '@expo/vector-icons';
 
@@ -110,12 +111,13 @@ export default function VoiceCallModal({
   onLeaveCall,
   onToggleMinimize,
 }: Props) {
+  const insets = useSafeAreaInsets();
   if (!visible) return null;
 
   // ── 1. Minimized Floating Voice Bar ─────────────────────────────────────────
   if (minimized) {
     return (
-      <View style={styles.minimizedBar}>
+      <View style={[styles.minimizedBar, { bottom: Math.max(insets.bottom + 60, 70) }]}>
         <TouchableOpacity style={styles.minimizedInfo} onPress={onToggleMinimize} activeOpacity={0.8}>
           <Feather name="radio" size={13} color="#23A55A" />
           <View style={{ flex: 1 }}>
@@ -152,7 +154,7 @@ export default function VoiceCallModal({
   // ── 2. Fullscreen Voice Channel Overlay ─────────────────────────────────────
   return (
     <Modal visible={visible} transparent animationType="slide">
-      <View style={styles.overlayContainer}>
+      <View style={[styles.overlayContainer, { paddingTop: insets.top }]}>
         {/* Top Header */}
         <View style={styles.modalHeader}>
           <TouchableOpacity onPress={onToggleMinimize} style={styles.minimizeBtn} activeOpacity={0.7}>
@@ -182,7 +184,7 @@ export default function VoiceCallModal({
         </ScrollView>
 
         {/* Floating Bottom Control Dock */}
-        <View style={styles.dockContainer}>
+        <View style={[styles.dockContainer, { paddingBottom: Math.max(insets.bottom + 14, 24) }]}>
           <TouchableOpacity
             style={[styles.dockBtn, isMuted ? styles.dockBtnMuted : styles.dockBtnNormal]}
             onPress={onToggleMute}
@@ -235,7 +237,6 @@ const BORDER_SUBTLE = 'rgba(255, 255, 255, 0.08)';
 const styles = StyleSheet.create({
   minimizedBar: {
     position: 'absolute',
-    bottom: 64,
     left: 12,
     right: 12,
     backgroundColor: '#111215',
@@ -248,10 +249,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#23A55A',
     zIndex: 999,
-    shadowColor: '#000',
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
-    elevation: 8,
   },
   minimizedInfo: {
     flexDirection: 'row',
@@ -262,8 +259,7 @@ const styles = StyleSheet.create({
   minimizedTitle: {
     color: '#23A55A',
     fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.5,
+    fontWeight: '700',
   },
   minimizedSubtitle: {
     color: TEXT_MUTED,
@@ -309,7 +305,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 12,
     paddingBottom: 14,
     backgroundColor: BG_SURFACE,
     borderBottomWidth: 1,
@@ -382,6 +378,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: BORDER_SUBTLE,
     overflow: 'hidden',
+    paddingBottom: 22,
   },
   tileCardSpeaking: {
     borderColor: '#23A55A',
@@ -391,12 +388,13 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   avatarCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    marginBottom: 4,
   },
   avatarSpeakingRing: {
     borderWidth: 3,
@@ -404,7 +402,7 @@ const styles = StyleSheet.create({
   },
   avatarInitial: {
     color: '#FFFFFF',
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: '800',
   },
   speakingGlowDot: {
@@ -420,22 +418,22 @@ const styles = StyleSheet.create({
   },
   nameBadgeRow: {
     position: 'absolute',
-    bottom: 8,
-    left: 8,
-    right: 8,
+    bottom: 6,
+    left: 6,
+    right: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(14, 15, 18, 0.75)',
+    backgroundColor: 'rgba(14, 15, 18, 0.85)',
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   participantName: {
     color: TEXT_PRIMARY,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     flex: 1,
   },
@@ -448,39 +446,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingTop: 12,
     backgroundColor: BG_SURFACE,
     borderTopWidth: 1,
     borderColor: BORDER_SUBTLE,
   },
   dockBtn: {
     alignItems: 'center',
-    gap: 5,
+    gap: 4,
     paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
   },
   dockBtnNormal: {
     backgroundColor: '#20232B',
-    borderWidth: 1,
-    borderColor: BORDER_SUBTLE,
-  },
-  dockBtnMuted: {
-    backgroundColor: '#2B161B',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
   },
   dockBtnActive: {
-    backgroundColor: '#1E2340',
-    borderWidth: 1,
-    borderColor: 'rgba(88, 101, 242, 0.4)',
+    backgroundColor: '#2B2F44',
+  },
+  dockBtnMuted: {
+    backgroundColor: '#30181C',
   },
   dockBtnDisconnect: {
-    backgroundColor: '#EF4444',
+    backgroundColor: '#ED4245',
+    paddingHorizontal: 16,
   },
   dockLabel: {
-    color: TEXT_PRIMARY,
     fontSize: 11,
     fontWeight: '700',
+    color: TEXT_PRIMARY,
   },
 });
