@@ -62,6 +62,10 @@ import TodoListModal from '../components/TodoListModal';
 import { useEvents } from '../hooks/useEvents';
 import EventsModal from '../components/EventsModal';
 import { useMusicPresence } from '../hooks/useMusicPresence';
+// Phase 5
+import { useAIAssistant } from '../hooks/useAIAssistant';
+import StickerPickerModal from '../components/StickerPickerModal';
+import { StickerItem } from '../hooks/useStickers';
 
 interface Props {
   passkey: string;
@@ -669,6 +673,10 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
   const [todosModalVisible, setTodosModalVisible] = useState(false);
   const [eventsModalVisible, setEventsModalVisible] = useState(false);
 
+  // ── Phase 5: AI Assistant & Stickers ──────────────────────────────────────
+  const { isAiThinking, askAI, summarizeChat } = useAIAssistant(sendMessage, awardMessageXp);
+  const [stickerModalVisible, setStickerModalVisible] = useState(false);
+
   const flatListRef = useRef<FlatList>(null);
   const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -761,6 +769,25 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
       return;
     }
 
+    if (text.startsWith('/ask')) {
+      const prompt = text.replace('/ask', '').trim();
+      setInputText('');
+      if (prompt) {
+        // Send user's question first
+        await sendMessage(text, replyingTo, 'text', { senderAvatar: photoURL || undefined });
+        awardMessageXp();
+        // Then AI answers
+        askAI(prompt, messages);
+      }
+      return;
+    }
+
+    if (text.startsWith('/summary')) {
+      setInputText('');
+      summarizeChat(messages);
+      return;
+    }
+
     const ytId = extractYouTubeId(text);
 
     setInputText('');
@@ -847,6 +874,11 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
 
   const handleSendGif = async (gifUrl: string) => {
     await sendMessage('GIF', null, 'gif', { gifUrl, senderAvatar: photoURL || undefined });
+  };
+
+  const handleSelectSticker = async (sticker: StickerItem) => {
+    await sendMessage(sticker.name, null, 'image', { imageUrl: sticker.url, senderAvatar: photoURL || undefined });
+    awardMessageXp();
   };
 
   const handleQuickReact = (msg: Message, emoji: string) => {
@@ -1455,6 +1487,20 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
                 </View>
                 <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Events</Text>
               </TouchableOpacity>
+
+              {/* 11. Stickers */}
+              <TouchableOpacity
+                style={styles.dockItem}
+                onPress={() => {
+                  setAttachMenuVisible(false);
+                  setStickerModalVisible(true);
+                }}
+              >
+                <View style={[styles.dockIconCircle, { backgroundColor: '#EC4899' }]}>
+                  <MaterialCommunityIcons name="sticker-emoji" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={[styles.dockItemLabel, { color: theme.textPrimary }]}>Stickers</Text>
+              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -1790,6 +1836,15 @@ export default function ChatScreen({ passkey, onBack, onBackToGame }: Props) {
           onSetRsvp={setRsvp}
           onDeleteEvent={deleteEvent}
           onClose={() => setEventsModalVisible(false)}
+        />
+      )}
+
+      {/* ── Sticker Picker Modal ───────────────────────────────────────────── */}
+      {stickerModalVisible && (
+        <StickerPickerModal
+          visible={stickerModalVisible}
+          onSelectSticker={handleSelectSticker}
+          onClose={() => setStickerModalVisible(false)}
         />
       )}
     </View>
